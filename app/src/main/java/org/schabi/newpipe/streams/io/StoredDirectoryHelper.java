@@ -106,15 +106,16 @@ public class StoredDirectoryHelper {
      *
      * @param context the Android context, used for SAF document access
      * @param recordedRootTreeUri the user-granted root tree URI, reported by {@link #getUri()}
-     * @param subTree the subfolder, addressed as a document descendant of the granted root
+     * @param subDoc the subfolder, addressed through the granted root tree
+     * as {@code tree/&lt;ROOT&gt;/document/&lt;SUB&gt;}
      * @param subTag the tag for the new helper
      */
     private StoredDirectoryHelper(@NonNull final Context context,
                                   @NonNull final Uri recordedRootTreeUri,
-                                  @NonNull final DocumentFile subTree,
+                                  @NonNull final DocumentFile subDoc,
                                   final String subTag) {
         this.context = context;
-        this.docTree = subTree;
+        this.docTree = subDoc;
         this.recordedTreeUri = recordedRootTreeUri;
         this.tag = subTag;
     }
@@ -194,10 +195,10 @@ public class StoredDirectoryHelper {
             if (docTree == null) {
                 storage = new StoredFileHelper(ioTree, filename, mime);
             } else if (recordedTreeUri != null) {
-                // Playlist-subfolder file: created inside the subfolder document,
-                // parent recorded as the granted root tree (no separate grant needed).
-                storage = new StoredFileHelper(context, docTree, recordedTreeUri,
-                        filename, mime, safe);
+                // Playlist-subfolder file: DocumentFile child creation cannot be used
+                // on this handle (leaf handles throw, nested tree URIs are rejected),
+                // so create directly under the grant-covered parent URI.
+                storage = createFileUnderGrantedTree(filename, mime, safe);
             } else {
                 // Original path, exactly like single-video downloads (DownloadDialog).
                 storage = new StoredFileHelper(context, docTree, filename, mime, safe);
@@ -215,6 +216,43 @@ public class StoredDirectoryHelper {
         storage.tag = tag;
 
         return storage;
+    }
+
+    /**
+     * Creates a file inside the subfolder addressed through the granted root tree.
+     *
+     * <p>Uses {@link DocumentsContract#createDocument} directly with the grant-covered
+     * parent URI ({@code tree/&lt;ROOT&gt;/document/&lt;SUB&gt;}).
+     * {@code DocumentFile.createFile} cannot be used on this handle: single-document
+     * handles do not support child creation and nested tree URIs are rejected by the
+     * provider. The granted root tree is recorded as the parent, like everywhere else.
+     * </p>
+     *
+     * @param filename the name of the file
+     * @param mime the mime type of the file
+     * @param safe true when the filename is known to be unused (skip lookup)
+     * @return the file helper, rooted at the granted root tree
+     * @throws IOException if the file cannot be created
+     */
+    private StoredFileHelper createFileUnderGrantedTree(final String filename, final String mime,
+                                                        final boolean safe) throws IOException {
+        DocumentFile res = safe ? null : findFileSAFHelper(context, docTree, filename);
+        if (res != null && res.exists() && res.isDirectory()) {
+            if (!res.delete()) {
+                throw new IOException("Directory with the same name found but cannot delete");
+            }
+            res = null;
+        }
+        if (res != null) {
+            // Reuse the existing file, recording the granted root as its parent.
+            return new StoredFileHelper(context, recordedTreeUri, res.getUri(), tag);
+        }
+        final Uri fileUri = DocumentsContract.createDocument(
+                context.getContentResolver(), docTree.getUri(), mime, filename);
+        if (fileUri == null) {
+            throw new IOException("Cannot create the file");
+        }
+        return new StoredFileHelper(context, recordedTreeUri, fileUri, tag);
     }
 
     /**
@@ -382,18 +420,20 @@ public class StoredDirectoryHelper {
      * Returns a helper for a named child folder of this directory, creating it if needed.
      *
      * <p>Used by playlist batch download for the optional playlist-named subfolder.
-     * The child is found (or created) as a document inside the already-granted root tree,
-     * so every file operation runs under the root grant. The returned helper keeps the
-     * ORIGINAL granted root tree URI as its recorded tree; it never builds a separate
-     * tree URI via {@link DocumentsContract#buildTreeDocumentUri(String, String)} and never
-     * calls {@code takePersistableUriPermission} on a derived URI, which would throw
-     * {@code SecurityException: No persistable permission grants found}.</p>
+     * The child is found (or created) through the already-granted root tree and stays
+     * addressed as {@code tree/&lt;ROOT&gt;/document/&lt;SUB&gt;}. A nested tree URI
+     * ({@code tree/&lt;SUB&gt;/...}) must never be built or wrapped here: it carries no
+     * permission grant of its own and the provider rejects writes to it with
+     * {@code SecurityException} (Permission Denial), so neither
+     * {@link DocumentFile#fromTreeUri} nor
+     * {@link DocumentsContract#buildTreeDocumentUri(String, String)} may be used with
+     * the subfolder's document ID.</p>
      *
      * @param ctx the Android context, used for SAF document access
      * @param name the already-sanitized subfolder name
      * @param subTag the tag for the returned helper
      * @return a helper rooted at the child folder
-     * @throws IOException if the folder cannot be created or wrapped
+     * @throws IOException if the folder cannot be created or accessed
      */
     public StoredDirectoryHelper getSubfolder(@NonNull final Context ctx,
                                               @NonNull final String name,
@@ -416,23 +456,28 @@ public class StoredDirectoryHelper {
             throw new IOException("Cannot create subfolder " + name + " in " + docTree.getUri());
         }
 
-        // Address the subfolder as a document descendant of the granted root tree.
+        // The subfolder handle must stay addressed THROUGH the granted root tree
+        // (tree/<ROOT>/document/<SUB>), which the root grant covers. Writes to a
+        // nested tree URI (tree/<SUB>/...) are rejected with SecurityException, so the
+        // subfolder is wrapped from the root tree URI plus its document ID, never via
+        // fromTreeUri/buildTreeDocumentUri with the subfolder ID.
         final String authority = sub.getUri().getAuthority();
         final String subDocumentId = DocumentsContract.getDocumentId(sub.getUri());
-        final Uri subTreeUri = DocumentsContract.buildTreeDocumentUri(authority, subDocumentId);
-        final DocumentFile subTree = DocumentFile.fromTreeUri(ctx, subTreeUri);
-        if (subTree == null) {
-            throw new IOException("Cannot wrap subfolder " + name + " in " + docTree.getUri());
-        }
-
-        // Record the ORIGINAL granted root tree URI (canonical tree form), not a
-        // derived one, so the mission pipeline keeps working under the root grant.
         final String rootDocumentId = DocumentsContract.getTreeDocumentId(docTree.getUri());
         final Uri rootTreeUri = DocumentsContract.buildTreeDocumentUri(authority, rootDocumentId);
+        final Uri subDocUri =
+                DocumentsContract.buildDocumentUriUsingTree(rootTreeUri, subDocumentId);
+        final DocumentFile subDoc = DocumentFile.fromSingleUri(ctx, subDocUri);
+        if (subDoc == null || !subDoc.isDirectory()) {
+            throw new IOException("Cannot access subfolder " + name + " in " + rootTreeUri);
+        }
+
+        // The recorded tree stays the ORIGINAL granted root tree URI, so the mission
+        // pipeline keeps working under the root grant.
         Log.d("PlaylistBatch", "getSubfolder: root=" + rootTreeUri
-                + " subfolder=" + sub.getUri() + " name=" + name);
+                + " subfolder=" + subDoc.getUri() + " name=" + name);
         final StoredDirectoryHelper helper =
-                new StoredDirectoryHelper(ctx, rootTreeUri, subTree, subTag);
+                new StoredDirectoryHelper(ctx, rootTreeUri, subDoc, subTag);
         helper.createdSubfolder = createdNow;
         return helper;
     }
