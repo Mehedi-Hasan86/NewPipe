@@ -489,30 +489,107 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     }
 
     /**
-     * Cancels a QUEUED batch (the ACTIVE batch is untouched): marks its pending items
-     * CANCELLED and moves the batch to DONE. Cancelling the ACTIVE batch instead uses
-     * [cancelBatch], which also starts the next queued batch.
+     * Deletes a batch. Queued and done batches are simply dropped. Deleting the ACTIVE
+     * batch first stops its running missions (downloaded files are always kept), drops
+     * the record without a DONE entry, and starts the next QUEUED batch, if any.
      *
-     * @param batchId the id of the queued batch to cancel
+     * @param batchId the id of the batch to delete
      */
-    fun cancelQueuedBatch(batchId: String) {
-        val target = otherBatches.firstOrNull {
-            it.id == batchId && it.queueState == BatchQueueState.QUEUED
-        } ?: return
-        Log.d(TAG, "cancel queued batch id=$batchId name=${target.playlistName}")
-        val done = target.copy(
-            status = BatchStatus.CANCELLED,
-            queueState = BatchQueueState.DONE,
-            items = target.items.map { item ->
-                if (!isTerminalItem(item.status)) {
-                    item.copy(status = BatchItemStatus.CANCELLED)
-                } else {
-                    item
-                }
-            }
-        )
-        otherBatches = otherBatches.map { if (it.id == batchId) done else it }
+    fun deleteBatch(batchId: String) {
+        val active = record
+        if (active != null && active.id == batchId) {
+            Log.d(TAG, "delete active batch id=$batchId, stopping missions (keeping files)")
+            deleteActiveMissions(alsoDeleteFile = false)
+            record = null
+            pendingFolderKey = null
+            stopWifiCallback()
+            persist()
+            activateNextBatch()
+            record?.let { Log.d(TAG, "next batch started id=${it.id} name=${it.playlistName}") }
+            return
+        }
+        val target = otherBatches.firstOrNull { it.id == batchId } ?: return
+        Log.d(TAG, "delete batch id=$batchId name=${target.playlistName} state=${target.queueState}")
+        otherBatches = otherBatches.filterNot { it.id == batchId }
         persist()
+    }
+
+    /**
+     * Re-queues every FAILED item of the batch (status back to PENDING, retry counters
+     * and failure reasons cleared). A DONE batch goes back to QUEUED — or becomes ACTIVE
+     * at once when nothing is active. ACTIVE and QUEUED batches keep their state
+     * (a PAUSED active batch stays paused until resumed).
+     *
+     * @param batchId the id of the batch whose failed items should run again
+     * @return how many items were re-queued
+     */
+    fun retryFailed(batchId: String): Int {
+        val active = record
+        if (active != null && active.id == batchId) {
+            val failed = active.items.count { it.status == BatchItemStatus.FAILED }
+            if (failed == 0) {
+                return 0
+            }
+            val status = if (active.status == BatchStatus.PAUSED) {
+                BatchStatus.PAUSED
+            } else {
+                BatchStatus.RUNNING
+            }
+            Log.d(TAG, "retry failed items batch=$batchId count=$failed state=ACTIVE")
+            record = active.copy(
+                status = status,
+                items = active.items.map { resetFailedItem(it) }
+            )
+            persist()
+            ensureBound { pump() }
+            return failed
+        }
+        val target = otherBatches.firstOrNull { it.id == batchId } ?: return 0
+        val failed = target.items.count { it.status == BatchItemStatus.FAILED }
+        if (failed == 0) {
+            return 0
+        }
+        val requeued = target.copy(
+            status = BatchStatus.RUNNING,
+            queueState = BatchQueueState.QUEUED,
+            items = target.items.map { resetFailedItem(it) }
+        )
+        otherBatches = otherBatches.map { if (it.id == batchId) requeued else it }
+        Log.d(TAG, "retry failed items batch=$batchId count=$failed state=QUEUED")
+        persist()
+        if (record == null) {
+            activateNextBatch()
+        }
+        return failed
+    }
+
+    private fun resetFailedItem(item: BatchItemRecord): BatchItemRecord {
+        return if (item.status == BatchItemStatus.FAILED) {
+            item.copy(
+                status = BatchItemStatus.PENDING,
+                retryCount = 0,
+                failureReason = null,
+                lastProgress = 0.0
+            )
+        } else {
+            item
+        }
+    }
+
+    /**
+     * Removes all DONE batches from the queue (downloaded files are kept).
+     *
+     * @return how many batches were removed
+     */
+    fun clearFinished(): Int {
+        val done = otherBatches.filter { it.queueState == BatchQueueState.DONE }
+        if (done.isEmpty()) {
+            return 0
+        }
+        Log.d(TAG, "clear finished batches count=${done.size}")
+        otherBatches = otherBatches.filterNot { it.queueState == BatchQueueState.DONE }
+        persist()
+        return done.size
     }
 
     /**
@@ -1004,8 +1081,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             .getInt(appContext.getString(R.string.default_download_threads), 3)
         Log.d(
             TAG,
-            "launchMission: kind=$kind file=${storage.uri} parent=${storage.parentUri} " +
-                "tag=${storage.tag} urls=${urls.size} ps=$psName item=${item.url}"
+            "launchMission: batch=${record?.id} kind=$kind file=${storage.uri} " +
+                "parent=${storage.parentUri} tag=${storage.tag} urls=${urls.size} " +
+                "ps=$psName item=${item.url}"
         )
         DownloadManagerService.startMission(
             appContext, urls, storage, kind, threads, info, psName, psArgs, 0L, recovery
@@ -1289,6 +1367,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
             DownloadManagerService.MESSAGE_FINISHED -> {
                 if (mission.isFinished) {
+                    Log.d(TAG, "mission finished: batch=${current.id} url=${item.url} file=$key")
                     setItemStatus(item.url, BatchItemStatus.COMPLETED, null)
                     liveMissions.remove(key)
                     pump()
@@ -1525,6 +1604,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         )
         otherBatches = otherBatches + finished.copy(queueState = BatchQueueState.DONE)
         record = null
+        pendingFolderKey = null
         stopWifiCallback()
         persist()
         activateNextBatch()
@@ -1664,12 +1744,15 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
     }
 
-    private fun deleteActiveMissions() {
+    private fun deleteActiveMissions(alsoDeleteFile: Boolean = true) {
         val manager = manager() ?: return
         record?.items?.forEach { item ->
             findLiveMission(item.url)?.let { mission ->
                 try {
-                    manager.deleteMission(mission, true)
+                    if (!alsoDeleteFile) {
+                        manager.pauseMission(mission)
+                    }
+                    manager.deleteMission(mission, alsoDeleteFile)
                 } catch (e: Exception) {
                     // ignore
                 }

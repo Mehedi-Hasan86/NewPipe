@@ -120,14 +120,25 @@
                     android:text="@string/playlist_batch_pause"
                     android:textSize="12sp" />
 
-                <Button
-                    android:id="@+id/cancelAllButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="@string/playlist_batch_cancel_all"
-                    android:textSize="12sp" />
+            <Button
+                android:id="@+id/cancelAllButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="@string/playlist_batch_cancel_all"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/retryFailedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="@string/playlist_batch_retry_failed"
+                android:textSize="12sp"
+                android:visibility="gone"
+                tools:visibility="visible" />
 
                 <Button
                     android:id="@+id/pickFolderButton"

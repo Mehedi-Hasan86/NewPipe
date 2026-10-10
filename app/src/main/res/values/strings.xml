@@ -632,6 +632,16 @@
     <string name="playlist_batch_confirm_cancel_batch">Cancel this queued batch?</string>
     <string name="playlist_batch_move_up">Move up</string>
     <string name="playlist_batch_move_down">Move down</string>
+    <string name="playlist_batch_add_batch">Add batch</string>
+    <string name="playlist_batch_clear_finished">Clear finished</string>
+    <string name="playlist_batch_confirm_clear_finished">Remove all finished batches? Downloaded files are kept.</string>
+    <string name="playlist_batch_cleared_finished">%1$d finished batches removed</string>
+    <string name="playlist_batch_retry_failed">Retry failed</string>
+    <string name="playlist_batch_retry_failed_toast">%1$d failed videos re-queued</string>
+    <string name="playlist_batch_delete_batch">Delete batch</string>
+    <string name="playlist_batch_confirm_delete_batch">Delete this batch? Downloaded files are kept.</string>
+    <string name="playlist_batch_confirm_delete_active">Delete the active batch? Running downloads stop. Downloaded files are kept.</string>
+    <string name="playlist_batch_batch_actions">Batch actions</string>
     <!-- Players -->
     <string name="caption_none">No Captions</string>
     <string name="resize_fit">Fit</string>

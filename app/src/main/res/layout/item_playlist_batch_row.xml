@@ -9,16 +9,34 @@
     android:paddingEnd="8dp"
     android:paddingBottom="8dp">
 
-    <TextView
-        android:id="@+id/batchRowTitleView"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:ellipsize="end"
-        android:maxLines="2"
-        android:textAppearance="?android:attr/textAppearanceMedium"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        tools:text="Playlist name" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/batchRowTitleView"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textAppearance="?android:attr/textAppearanceMedium"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            tools:text="Playlist name" />
+
+        <ImageButton
+            android:id="@+id/batchRowOverflowButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/playlist_batch_batch_actions"
+            android:src="@drawable/ic_more_vert"
+            tools:ignore="ContentDescription" />
+
+    </LinearLayout>
 
     <TextView
         android:id="@+id/batchRowStateView"
@@ -37,41 +55,5 @@
         android:max="100"
         android:progress="0"
         tools:progress="40" />
-
-    <LinearLayout
-        android:id="@+id/batchRowActions"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/batchRowCancelButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/playlist_batch_cancel_batch"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/batchRowUpButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="@string/playlist_batch_move_up"
-            android:textSize="12sp" />
-
-        <Button
-            android:id="@+id/batchRowDownButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:text="@string/playlist_batch_move_down"
-            android:textSize="12sp" />
-
-    </LinearLayout>
 
 </LinearLayout>

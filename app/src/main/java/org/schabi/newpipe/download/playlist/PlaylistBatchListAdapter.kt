@@ -8,18 +8,21 @@ package org.schabi.newpipe.download.playlist
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.appcompat.widget.PopupMenu
 import androidx.recyclerview.widget.RecyclerView
 import org.schabi.newpipe.R
 import org.schabi.newpipe.databinding.ItemPlaylistBatchRowBinding
 
 /**
  * Rows of the batch list: one row per batch (ACTIVE first, then QUEUED, then DONE).
- * Tapping a row opens its items; QUEUED rows offer cancel, move up and move down.
+ * Tapping a row opens its items; the overflow menu offers retry failed, move up/down
+ * (queued batches) and delete.
  */
 class PlaylistBatchListAdapter(
     private val onSelect: (batchId: String) -> Unit,
-    private val onCancelQueued: (batchId: String) -> Unit,
-    private val onMoveQueued: (batchId: String, delta: Int) -> Unit
+    private val onRetryFailed: (batchId: String) -> Unit,
+    private val onMoveQueued: (batchId: String, delta: Int) -> Unit,
+    private val onDeleteBatch: (batchId: String, isActive: Boolean) -> Unit
 ) : RecyclerView.Adapter<PlaylistBatchListAdapter.ViewHolder>() {
 
     private var batches: List<BatchSummary> = emptyList()
@@ -68,27 +71,56 @@ class PlaylistBatchListAdapter(
             binding.batchRowProgress.progress =
                 (summary.overallFraction * 100).toInt().coerceIn(0, 100)
             binding.root.setOnClickListener { onSelect(summary.batchId) }
+            binding.batchRowOverflowButton.setOnClickListener { anchor ->
+                showMenu(anchor, summary)
+            }
+        }
 
+        private fun showMenu(anchor: View, summary: BatchSummary) {
+            val popup = PopupMenu(anchor.context, anchor)
+            popup.menuInflater.inflate(R.menu.menu_playlist_batch_row, popup.menu)
             val queued = summary.queueState == BatchQueueState.QUEUED
-            binding.batchRowActions.visibility = if (queued) View.VISIBLE else View.GONE
+            popup.menu.findItem(R.id.batch_row_retry_failed).isVisible = summary.failedCount > 0
+            popup.menu.findItem(R.id.batch_row_move_up).isVisible = queued
+            popup.menu.findItem(R.id.batch_row_move_down).isVisible = queued
             if (queued) {
                 val queuedIds = batches
                     .filter { it.queueState == BatchQueueState.QUEUED }
                     .map { it.batchId }
-                binding.batchRowUpButton.isEnabled =
+                popup.menu.findItem(R.id.batch_row_move_up).isEnabled =
                     queuedIds.firstOrNull() != summary.batchId
-                binding.batchRowDownButton.isEnabled =
+                popup.menu.findItem(R.id.batch_row_move_down).isEnabled =
                     queuedIds.lastOrNull() != summary.batchId
-                binding.batchRowCancelButton.setOnClickListener {
-                    onCancelQueued(summary.batchId)
-                }
-                binding.batchRowUpButton.setOnClickListener {
-                    onMoveQueued(summary.batchId, -1)
-                }
-                binding.batchRowDownButton.setOnClickListener {
-                    onMoveQueued(summary.batchId, 1)
+            }
+            popup.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    R.id.batch_row_retry_failed -> {
+                        onRetryFailed(summary.batchId)
+                        true
+                    }
+
+                    R.id.batch_row_move_up -> {
+                        onMoveQueued(summary.batchId, -1)
+                        true
+                    }
+
+                    R.id.batch_row_move_down -> {
+                        onMoveQueued(summary.batchId, 1)
+                        true
+                    }
+
+                    R.id.batch_row_delete -> {
+                        onDeleteBatch(
+                            summary.batchId,
+                            summary.queueState == BatchQueueState.ACTIVE
+                        )
+                        true
+                    }
+
+                    else -> false
                 }
             }
+            popup.show()
         }
     }
 }

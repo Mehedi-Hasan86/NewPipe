@@ -35,6 +35,7 @@ import org.schabi.newpipe.settings.NewPipeSettings;
 import org.schabi.newpipe.streams.io.NoFileManagerSafeGuard;
 import org.schabi.newpipe.streams.io.StoredFileHelper;
 import org.schabi.newpipe.util.FilePickerActivityHelper;
+import org.schabi.newpipe.util.NavigationHelper;
 
 import java.io.File;
 import java.io.IOException;
@@ -202,6 +203,9 @@ public class MissionsFragment extends Fragment {
             mAdapter.refreshMissionItems();// update items view
 
             return super.onOptionsItemSelected(item);
+        } else if (itemId == R.id.batch_downloads) {
+            NavigationHelper.openPlaylistBatchQueue(requireContext());
+            return true;
         }
         return super.onOptionsItemSelected(item);
     }

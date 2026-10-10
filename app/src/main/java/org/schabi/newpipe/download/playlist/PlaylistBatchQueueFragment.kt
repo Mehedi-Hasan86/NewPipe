@@ -8,18 +8,25 @@ package org.schabi.newpipe.download.playlist
 import android.app.Activity
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.core.view.MenuProvider
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import org.schabi.newpipe.R
 import org.schabi.newpipe.databinding.FragmentPlaylistBatchQueueBinding
+import org.schabi.newpipe.util.NO_SERVICE_ID
+import org.schabi.newpipe.util.NavigationHelper
 
 /**
  * Batch queue screen: sequential FIFO list of batches (title, item count, state,
@@ -80,8 +87,9 @@ class PlaylistBatchQueueFragment : Fragment() {
 
         batchAdapter = PlaylistBatchListAdapter(
             onSelect = { batchId -> selectBatch(batchId) },
-            onCancelQueued = { batchId -> confirmCancelQueued(batchId) },
-            onMoveQueued = { batchId, delta -> manager.moveQueuedBatch(batchId, delta) }
+            onRetryFailed = { batchId -> retryFailedWithToast(batchId) },
+            onMoveQueued = { batchId, delta -> manager.moveQueuedBatch(batchId, delta) },
+            onDeleteBatch = { batchId, isActive -> confirmDeleteBatch(batchId, isActive) }
         )
         binding.batchList.layoutManager = LinearLayoutManager(requireContext())
         binding.batchList.adapter = batchAdapter
@@ -96,6 +104,9 @@ class PlaylistBatchQueueFragment : Fragment() {
 
         binding.pauseResumeButton.setOnClickListener { togglePause() }
         binding.cancelAllButton.setOnClickListener { confirmCancelAll() }
+        binding.retryFailedButton.setOnClickListener {
+            selectedBatchId?.let { batchId -> retryFailedWithToast(batchId) }
+        }
         binding.pickFolderButton.setOnClickListener { pickFolder() }
         binding.filterAllButton.setOnClickListener {
             adapter.setFilter(PlaylistBatchQueueAdapter.Filter.ALL)
@@ -146,6 +157,11 @@ class PlaylistBatchQueueFragment : Fragment() {
         manager.askLanguageEvent.observe(viewLifecycleOwner) { event ->
             event.consume()?.let { urls -> showAskLanguageDialog(urls) }
         }
+        requireActivity().addMenuProvider(
+            batchMenuProvider,
+            viewLifecycleOwner,
+            Lifecycle.State.RESUMED
+        )
         manager.restoreIfNeeded()
         if (selectedBatchId != null) {
             selectBatch(selectedBatchId!!)
@@ -227,11 +243,75 @@ class PlaylistBatchQueueFragment : Fragment() {
         }
     }
 
-    private fun confirmCancelQueued(batchId: String) {
+    private fun retryFailedWithToast(batchId: String) {
+        val count = manager.retryFailed(batchId)
+        if (count > 0) {
+            Toast.makeText(
+                requireContext(),
+                getString(R.string.playlist_batch_retry_failed_toast, count),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private fun confirmDeleteBatch(batchId: String, isActive: Boolean) {
         AlertDialog.Builder(requireContext())
-            .setMessage(R.string.playlist_batch_confirm_cancel_batch)
-            .setPositiveButton(R.string.playlist_batch_cancel_batch) { _, _ ->
-                manager.cancelQueuedBatch(batchId)
+            .setMessage(
+                if (isActive) {
+                    R.string.playlist_batch_confirm_delete_active
+                } else {
+                    R.string.playlist_batch_confirm_delete_batch
+                }
+            )
+            .setPositiveButton(R.string.playlist_batch_delete_batch) { _, _ ->
+                manager.deleteBatch(batchId)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private val batchMenuProvider = object : MenuProvider {
+        override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
+            menuInflater.inflate(R.menu.menu_playlist_batch_queue, menu)
+        }
+
+        override fun onPrepareMenu(menu: Menu) {
+            val hasDone = manager.batchList.value
+                ?.any { it.queueState == BatchQueueState.DONE } == true
+            menu.findItem(R.id.batch_menu_clear_finished)?.isVisible = hasDone
+        }
+
+        override fun onMenuItemSelected(item: MenuItem): Boolean {
+            return when (item.itemId) {
+                R.id.batch_menu_add -> {
+                    openIntake()
+                    true
+                }
+
+                R.id.batch_menu_clear_finished -> {
+                    confirmClearFinished()
+                    true
+                }
+
+                else -> false
+            }
+        }
+    }
+
+    private fun openIntake() {
+        NavigationHelper.openPlaylistBatchDownload(requireContext(), NO_SERVICE_ID, "", null)
+    }
+
+    private fun confirmClearFinished() {
+        AlertDialog.Builder(requireContext())
+            .setMessage(R.string.playlist_batch_confirm_clear_finished)
+            .setPositiveButton(R.string.playlist_batch_clear_finished) { _, _ ->
+                val cleared = manager.clearFinished()
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.playlist_batch_cleared_finished, cleared),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -270,6 +350,8 @@ class PlaylistBatchQueueFragment : Fragment() {
             state.batchStatus == BatchStatus.CANCELLED
         binding.pauseResumeButton.isEnabled = !terminal && state.totalCount > 0
         binding.cancelAllButton.isEnabled = !terminal && state.totalCount > 0
+        binding.retryFailedButton.visibility =
+            if (state.failedCount > 0) View.VISIBLE else View.GONE
         binding.pickFolderButton.visibility =
             if (state.needsFolder) View.VISIBLE else View.GONE
 

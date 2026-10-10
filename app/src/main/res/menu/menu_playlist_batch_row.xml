@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/batch_row_retry_failed"
+        android:title="@string/playlist_batch_retry_failed" />
+    <item
+        android:id="@+id/batch_row_move_up"
+        android:title="@string/playlist_batch_move_up" />
+    <item
+        android:id="@+id/batch_row_move_down"
+        android:title="@string/playlist_batch_move_down" />
+    <item
+        android:id="@+id/batch_row_delete"
+        android:title="@string/playlist_batch_delete_batch" />
+</menu>
