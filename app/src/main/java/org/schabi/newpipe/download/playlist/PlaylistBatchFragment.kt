@@ -207,7 +207,7 @@ class PlaylistBatchFragment : Fragment() {
             .setTitle(R.string.playlist_batch_confirm_title)
             .setMessage(message)
             .setPositiveButton(R.string.playlist_batch_start_download) { _, _ ->
-                startBatch(selected, options, replace = false)
+                startBatch(selected, options)
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -215,42 +215,31 @@ class PlaylistBatchFragment : Fragment() {
 
     private fun startBatch(
         selected: List<PlaylistBatchItem>,
-        options: PlaylistDownloadOptions,
-        replace: Boolean
+        options: PlaylistDownloadOptions
     ) {
         val manager = BatchDownloadManager.getInstance(requireContext())
-        if (!replace && manager.hasUnfinishedBatch()) {
-            AlertDialog.Builder(requireContext())
-                .setMessage(R.string.playlist_batch_confirm_replace)
-                .setPositiveButton(R.string.playlist_batch_replace) { _, _ ->
-                    startBatch(selected, options, replace = true)
-                }
-                .setNegativeButton(R.string.cancel, null)
-                .show()
-            return
-        }
         val overrides = selected.mapNotNull { item ->
             viewModel.getOverride(item.url)?.let { item.url to it }
         }.toMap()
         val header = viewModel.header.value
         val playlistName = header?.name?.takeIf { it.isNotBlank() }
             ?: initialArgs().third.orEmpty()
-        if (!manager.startBatch(
-                playlistName = playlistName,
-                playlistUrl = viewModel.currentUrl(),
-                serviceId = viewModel.currentServiceId(),
-                items = selected,
-                options = options,
-                overrides = overrides,
-                replace = replace
-            )
-        ) {
+        // Sequential FIFO: the batch starts at once when nothing is ACTIVE,
+        // otherwise it is queued (position is 1-based among queued batches).
+        val position = manager.startBatch(
+            playlistName = playlistName,
+            playlistUrl = viewModel.currentUrl(),
+            serviceId = viewModel.currentServiceId(),
+            items = selected,
+            options = options,
+            overrides = overrides
+        )
+        if (position > 0) {
             Toast.makeText(
                 requireContext(),
-                R.string.playlist_batch_batch_busy,
+                getString(R.string.playlist_batch_added_to_queue, position),
                 Toast.LENGTH_SHORT
             ).show()
-            return
         }
         NavigationHelper.openPlaylistBatchQueue(requireContext())
     }

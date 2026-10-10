@@ -11,6 +11,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
@@ -21,10 +22,11 @@ import org.schabi.newpipe.R
 import org.schabi.newpipe.databinding.FragmentPlaylistBatchQueueBinding
 
 /**
- * Batch queue screen (STEP 3): overall + per-item progress polled from
- * [BatchDownloadManager], retry/cancel per item and for the whole batch,
- * All/Completed/Failed filters and pending reorder. The existing Downloads
- * screen keeps working as before.
+ * Batch queue screen: sequential FIFO list of batches (title, item count, state,
+ * progress for the active one). Tapping a batch opens its items in the reused item
+ * screen. Queued batches offer cancel, move up and move down. Pause/resume/cancel
+ * all and the per-item retry/cancel buttons apply to the ACTIVE batch only; the
+ * existing Downloads screen keeps working as before.
  */
 class PlaylistBatchQueueFragment : Fragment() {
 
@@ -39,8 +41,13 @@ class PlaylistBatchQueueFragment : Fragment() {
     private val binding get() = _binding!!
 
     private lateinit var manager: BatchDownloadManager
+    private lateinit var batchAdapter: PlaylistBatchListAdapter
     private lateinit var adapter: PlaylistBatchQueueAdapter
     private var pendingFolderKey: String? = null
+
+    /** Id of the batch shown in the item view; null shows the batch list. */
+    private var selectedBatchId: String? = null
+    private var dragEnabled = true
 
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -71,6 +78,14 @@ class PlaylistBatchQueueFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        batchAdapter = PlaylistBatchListAdapter(
+            onSelect = { batchId -> selectBatch(batchId) },
+            onCancelQueued = { batchId -> confirmCancelQueued(batchId) },
+            onMoveQueued = { batchId, delta -> manager.moveQueuedBatch(batchId, delta) }
+        )
+        binding.batchList.layoutManager = LinearLayoutManager(requireContext())
+        binding.batchList.adapter = batchAdapter
+
         adapter = PlaylistBatchQueueAdapter(
             onRetry = { url -> manager.retryItem(url) },
             onCancel = { url -> manager.cancelItem(url) }
@@ -92,8 +107,31 @@ class PlaylistBatchQueueFragment : Fragment() {
             adapter.setFilter(PlaylistBatchQueueAdapter.Filter.FAILED)
         }
 
+        requireActivity().onBackPressedDispatcher.addCallback(
+            viewLifecycleOwner,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (selectedBatchId != null) {
+                        selectedBatchId = null
+                        showList()
+                    } else {
+                        isEnabled = false
+                        requireActivity().onBackPressedDispatcher.onBackPressed()
+                    }
+                }
+            }
+        )
+
         // The queue reads persisted state from the manager (survives restarts).
-        manager.uiState.observe(viewLifecycleOwner) { state -> render(state) }
+        manager.batchList.observe(viewLifecycleOwner) { summaries ->
+            renderBatchList(summaries)
+        }
+        manager.uiState.observe(viewLifecycleOwner) { state ->
+            val selected = selectedBatchId
+            if (selected != null && selected == state.batchId) {
+                render(state)
+            }
+        }
         manager.messageEvent.observe(viewLifecycleOwner) { event ->
             event.consume()?.let { text ->
                 Toast.makeText(requireContext(), text, Toast.LENGTH_LONG).show()
@@ -109,6 +147,11 @@ class PlaylistBatchQueueFragment : Fragment() {
             event.consume()?.let { urls -> showAskLanguageDialog(urls) }
         }
         manager.restoreIfNeeded()
+        if (selectedBatchId != null) {
+            selectBatch(selectedBatchId!!)
+        } else {
+            showList()
+        }
     }
 
     override fun onDestroyView() {
@@ -116,6 +159,86 @@ class PlaylistBatchQueueFragment : Fragment() {
         super.onDestroyView()
     }
 
+    // ------------------------------------------------------------------
+    // Batch list
+    // ------------------------------------------------------------------
+
+    private fun renderBatchList(summaries: List<BatchSummary>) {
+        if (_binding == null) {
+            return
+        }
+        batchAdapter.setBatches(summaries)
+        binding.batchList.visibility = if (summaries.isNotEmpty()) View.VISIBLE else View.GONE
+        binding.batchesEmptyView.visibility =
+            if (summaries.isNotEmpty()) View.GONE else View.VISIBLE
+        val selected = selectedBatchId
+        if (selected != null) {
+            if (summaries.none { it.batchId == selected }) {
+                selectedBatchId = null
+                showList()
+                return
+            }
+            val activeId = summaries
+                .firstOrNull { it.queueState == BatchQueueState.ACTIVE }?.batchId
+            if (selected != activeId) {
+                manager.itemsSnapshot(selected)?.let { render(it) }
+            }
+        }
+        refreshItemActions()
+    }
+
+    private fun selectBatch(batchId: String) {
+        selectedBatchId = batchId
+        showItems()
+        val live = manager.uiState.value
+        if (live != null && live.batchId == batchId) {
+            render(live)
+        } else {
+            manager.itemsSnapshot(batchId)?.let { render(it) }
+        }
+    }
+
+    private fun showList() {
+        binding.batchListView.visibility = View.VISIBLE
+        binding.batchItemView.visibility = View.GONE
+    }
+
+    private fun showItems() {
+        binding.batchListView.visibility = View.GONE
+        binding.batchItemView.visibility = View.VISIBLE
+    }
+
+    /**
+     * Item actions (pause/resume/cancel all, per-item retry/cancel, drag reorder)
+     * apply to the ACTIVE batch only; they are hidden while another batch is shown.
+     */
+    private fun refreshItemActions() {
+        val summaries = manager.batchList.value.orEmpty()
+        val activeId = summaries
+            .firstOrNull { it.queueState == BatchQueueState.ACTIVE }?.batchId
+        val viewingActive = selectedBatchId != null && selectedBatchId == activeId
+        adapter.setActionsEnabled(viewingActive)
+        dragEnabled = viewingActive
+        val controls = if (viewingActive) View.VISIBLE else View.GONE
+        binding.pauseResumeButton.visibility = controls
+        binding.cancelAllButton.visibility = controls
+        if (!viewingActive) {
+            binding.pickFolderButton.visibility = View.GONE
+        }
+    }
+
+    private fun confirmCancelQueued(batchId: String) {
+        AlertDialog.Builder(requireContext())
+            .setMessage(R.string.playlist_batch_confirm_cancel_batch)
+            .setPositiveButton(R.string.playlist_batch_cancel_batch) { _, _ ->
+                manager.cancelQueuedBatch(batchId)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    // ------------------------------------------------------------------
+    // Item view (reused item screen)
     // ------------------------------------------------------------------
 
     private fun render(state: BatchUiState) {
@@ -155,6 +278,7 @@ class PlaylistBatchQueueFragment : Fragment() {
         binding.queueEmptyView.visibility = if (hasItems) View.GONE else View.VISIBLE
 
         adapter.setItems(state.items)
+        refreshItemActions()
     }
 
     private fun batchStatusText(state: BatchUiState): String {
@@ -248,6 +372,9 @@ class PlaylistBatchQueueFragment : Fragment() {
             viewHolder: RecyclerView.ViewHolder,
             target: RecyclerView.ViewHolder
         ): Boolean {
+            if (!dragEnabled) {
+                return false
+            }
             val fromUrl = adapter.urlAt(viewHolder.bindingAdapterPosition) ?: return false
             val toUrl = adapter.urlAt(target.bindingAdapterPosition) ?: return false
             val from = adapter.pendingIndex(fromUrl)
@@ -263,7 +390,7 @@ class PlaylistBatchQueueFragment : Fragment() {
             recyclerView: RecyclerView,
             viewHolder: RecyclerView.ViewHolder
         ): Int {
-            return if (adapter.isPendingAt(viewHolder.bindingAdapterPosition)) {
+            return if (dragEnabled && adapter.isPendingAt(viewHolder.bindingAdapterPosition)) {
                 super.getMovementFlags(recyclerView, viewHolder)
             } else {
                 0

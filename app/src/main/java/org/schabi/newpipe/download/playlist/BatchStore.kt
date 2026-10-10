@@ -26,7 +26,7 @@ enum class BatchItemStatus {
     CANCELLED
 }
 
-/** Batch-level state. */
+/** Batch-level execution state (only meaningful while the batch is ACTIVE). */
 @Serializable
 enum class BatchStatus {
     RUNNING,
@@ -35,6 +35,14 @@ enum class BatchStatus {
     COOLDOWN,
     COMPLETED,
     CANCELLED
+}
+
+/** Queue position of a batch. At most one batch is ACTIVE at a time. */
+@Serializable
+enum class BatchQueueState {
+    ACTIVE,
+    QUEUED,
+    DONE
 }
 
 /** One queued video. [storageUri] is the target file URI once created. */
@@ -56,7 +64,7 @@ data class BatchItemRecord(
     val lastProgress: Double = 0.0
 )
 
-/** One batch (single active batch at a time, replaced on new start). */
+/** One batch. Each batch keeps the options captured at creation time. */
 @Serializable
 data class BatchRecord(
     val id: String,
@@ -65,59 +73,113 @@ data class BatchRecord(
     val serviceId: Int,
     val createdAt: Long = 0L,
     val status: BatchStatus = BatchStatus.RUNNING,
+    val queueState: BatchQueueState = BatchQueueState.ACTIVE,
     val options: PlaylistDownloadOptions = PlaylistDownloadOptions(),
     val items: List<BatchItemRecord> = emptyList(),
     /** Items skipped for missing language under ASK_AT_END, awaiting the end dialog. */
     val askLanguageUrls: List<String> = emptyList()
 )
 
+/** Versioned on-disk shape: a sequential FIFO queue of batches (schema version 2). */
+@Serializable
+data class BatchQueueFile(
+    val version: Int = CURRENT_QUEUE_VERSION,
+    val batches: List<BatchRecord> = emptyList()
+) {
+    companion object {
+        const val CURRENT_QUEUE_VERSION = 2
+    }
+}
+
 /**
- * Persists the active batch as JSON in app-private storage
- * (`filesDir/playlist_batch/current_batch.json`), independent of newpipe.db.
+ * Persists the sequential FIFO queue of batches as JSON in app-private storage
+ * (`filesDir/playlist_batch/batch_queue.json`), independent of newpipe.db.
  */
 object BatchStore {
     private const val DIR_NAME = "playlist_batch"
-    private const val FILE_NAME = "current_batch.json"
+    private const val FILE_NAME = "batch_queue.json"
+    private const val LEGACY_FILE_NAME = "current_batch.json"
 
     private val json = Json {
         prettyPrint = true
         ignoreUnknownKeys = true
     }
 
-    private fun storeFile(context: Context): File {
+    private fun storeDir(context: Context): File {
         val dir = File(context.filesDir, DIR_NAME)
         if (!dir.exists()) {
             dir.mkdirs()
         }
-        return File(dir, FILE_NAME)
+        return dir
     }
 
-    /** Loads the persisted batch, or null when none exists. */
-    fun load(context: Context): BatchRecord? {
-        val file = storeFile(context)
-        if (!file.exists()) {
-            return null
+    /**
+     * Loads the persisted batch queue (schema version 2). A legacy version 1
+     * `current_batch.json` (single batch) is migrated into the list as the first
+     * batch on first read, keeping every item and its state: terminal batches
+     * become DONE, anything else becomes ACTIVE.
+     *
+     * @param context the Android context
+     * @return the persisted batches in queue order, or empty when none exist
+     */
+    fun loadQueue(context: Context): List<BatchRecord> {
+        val dir = storeDir(context)
+        val file = File(dir, FILE_NAME)
+        if (file.exists()) {
+            try {
+                val stored = json.decodeFromString(
+                    BatchQueueFile.serializer(),
+                    file.readText()
+                )
+                return stored.batches
+            } catch (e: Exception) {
+                return emptyList()
+            }
+        }
+        val legacy = File(dir, LEGACY_FILE_NAME)
+        if (!legacy.exists()) {
+            return emptyList()
         }
         return try {
-            json.decodeFromString(BatchRecord.serializer(), file.readText())
+            val single = json.decodeFromString(BatchRecord.serializer(), legacy.readText())
+            val queueState = if (single.status == BatchStatus.COMPLETED ||
+                single.status == BatchStatus.CANCELLED
+            ) {
+                BatchQueueState.DONE
+            } else {
+                BatchQueueState.ACTIVE
+            }
+            listOf(single.copy(queueState = queueState))
         } catch (e: Exception) {
-            null
+            emptyList()
         }
     }
 
-    /** Atomically writes [record] (temp file + rename). */
-    fun save(context: Context, record: BatchRecord) {
-        val file = storeFile(context)
-        val tmp = File(file.parent, "$FILE_NAME.tmp")
-        tmp.writeText(json.encodeToString(BatchRecord.serializer(), record))
+    /**
+     * Atomically writes [batches] (temp file + rename). A leftover legacy version 1
+     * file is deleted after a successful write so it is never migrated twice.
+     *
+     * @param context the Android context
+     * @param batches the batches in queue order
+     */
+    fun saveQueue(context: Context, batches: List<BatchRecord>) {
+        val dir = storeDir(context)
+        val file = File(dir, FILE_NAME)
+        val tmp = File(dir, "$FILE_NAME.tmp")
+        tmp.writeText(
+            json.encodeToString(BatchQueueFile.serializer(), BatchQueueFile(batches = batches))
+        )
         if (!tmp.renameTo(file)) {
             file.delete()
             tmp.renameTo(file)
         }
+        File(dir, LEGACY_FILE_NAME).delete()
     }
 
-    /** Deletes the persisted batch, if any. */
-    fun clear(context: Context) {
-        storeFile(context).delete()
+    /** Deletes both the version 2 queue file and any legacy version 1 file, if any. */
+    fun clearQueue(context: Context) {
+        val dir = storeDir(context)
+        File(dir, FILE_NAME).delete()
+        File(dir, LEGACY_FILE_NAME).delete()
     }
 }

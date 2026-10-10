@@ -622,6 +622,16 @@
     <string name="playlist_batch_detail_downloading">Downloading %d</string>
     <string name="playlist_batch_detail_merging">Merging %d</string>
     <string name="playlist_batch_detail_pending">Pending %d</string>
+    <string name="playlist_batch_added_to_queue">Added to queue (position %1$d)</string>
+    <string name="playlist_batch_list_title">Batches</string>
+    <string name="playlist_batch_no_batches">No batches yet</string>
+    <string name="playlist_batch_state_active">Active</string>
+    <string name="playlist_batch_state_queued">Queued</string>
+    <string name="playlist_batch_state_done">Done</string>
+    <string name="playlist_batch_cancel_batch">Cancel batch</string>
+    <string name="playlist_batch_confirm_cancel_batch">Cancel this queued batch?</string>
+    <string name="playlist_batch_move_up">Move up</string>
+    <string name="playlist_batch_move_down">Move down</string>
     <!-- Players -->
     <string name="caption_none">No Captions</string>
     <string name="resize_fit">Fit</string>

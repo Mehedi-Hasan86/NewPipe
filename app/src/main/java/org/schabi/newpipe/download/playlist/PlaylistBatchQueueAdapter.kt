@@ -30,10 +30,20 @@ class PlaylistBatchQueueAdapter(
     private var allItems: List<BatchItemUiState> = emptyList()
     private var visibleItems: List<BatchItemUiState> = emptyList()
     private var filter: Filter = Filter.ALL
+    private var actionsEnabled = true
 
     fun setItems(items: List<BatchItemUiState>) {
         allItems = items
         applyFilter()
+    }
+
+    /**
+     * Hides the per-item retry/cancel buttons when viewing a non-ACTIVE batch
+     * (those actions only apply to the ACTIVE batch).
+     */
+    fun setActionsEnabled(enabled: Boolean) {
+        actionsEnabled = enabled
+        notifyDataSetChanged()
     }
 
     fun setFilter(newFilter: Filter) {
@@ -109,15 +119,19 @@ class PlaylistBatchQueueAdapter(
                 binding.rowErrorView.visibility = View.GONE
             }
 
-            val retryable = item.status == BatchItemStatus.FAILED ||
-                item.status == BatchItemStatus.SKIPPED
+            val retryable = actionsEnabled && (
+                item.status == BatchItemStatus.FAILED ||
+                    item.status == BatchItemStatus.SKIPPED
+                )
             binding.rowRetryButton.visibility = if (retryable) View.VISIBLE else View.GONE
             binding.rowRetryButton.setOnClickListener { onRetry(item.url) }
 
-            val cancellable = item.status == BatchItemStatus.PENDING ||
-                item.status == BatchItemStatus.RESOLVING ||
-                item.status == BatchItemStatus.DOWNLOADING ||
-                item.status == BatchItemStatus.MERGING
+            val cancellable = actionsEnabled && (
+                item.status == BatchItemStatus.PENDING ||
+                    item.status == BatchItemStatus.RESOLVING ||
+                    item.status == BatchItemStatus.DOWNLOADING ||
+                    item.status == BatchItemStatus.MERGING
+                )
             binding.rowCancelButton.visibility = if (cancellable) View.VISIBLE else View.GONE
             binding.rowCancelButton.setOnClickListener { onCancel(item.url) }
         }

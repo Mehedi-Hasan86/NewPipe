@@ -80,6 +80,19 @@ data class BatchUiState(
     val overallFraction: Double
 )
 
+/** One row of the batch queue screen (batch list). */
+data class BatchSummary(
+    val batchId: String,
+    val playlistName: String,
+    val queueState: BatchQueueState,
+    val batchStatus: BatchStatus,
+    val totalCount: Int,
+    val completedCount: Int,
+    val failedCount: Int,
+    val overallFraction: Double,
+    val createdAt: Long
+)
+
 /**
  * Executes playlist batch downloads on top of the existing GigaGet pipeline
  * ([DownloadManagerService]/[DownloadManager]/[DownloadMission]).
@@ -123,6 +136,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     )
     val uiState: LiveData<BatchUiState> = _uiState
 
+    private val _batchList = MutableLiveData<List<BatchSummary>>(emptyList())
+    val batchList: LiveData<List<BatchSummary>> = _batchList
+
     private val _messageEvent = MutableLiveData<BatchEvent<String>>()
     val messageEvent: LiveData<BatchEvent<String>> = _messageEvent
 
@@ -135,6 +151,12 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     val askLanguageEvent: LiveData<BatchEvent<List<String>>> = _askLanguageEvent
 
     private var record: BatchRecord? = null
+
+    /**
+     * Every non-ACTIVE batch in queue order: QUEUED batches (FIFO) first, then DONE
+     * batches. Together with [record] this is the whole persisted queue.
+     */
+    private var otherBatches: List<BatchRecord> = emptyList()
     private var binder: DownloadManagerService.DownloadManagerBinder? = null
     private var bound = false
     private var pendingAfterBind: (() -> Unit)? = null
@@ -193,20 +215,15 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     // Public API
     // ------------------------------------------------------------------
 
-    /** True when a non-terminal batch is persisted (caller asks to replace it). */
-    fun hasUnfinishedBatch(): Boolean {
-        val current = record ?: BatchStore.load(appContext)
-        if (current == null || isTerminal(current.status)) {
-            return false
-        }
-        // Only consider the batch "unfinished" if there's at least one
-        // non-terminal item (PENDING/RESOLVING/DOWNLOADING/MERGING/PAUSED).
-        return current.items.any { !isTerminalItem(it.status) }
-    }
-
     /**
-     * Starts a new batch, replacing any previous one when [replace] is true.
-     * Returns false when another batch is active and [replace] is false.
+     * Enqueues a new batch. Each batch keeps the options captured here at creation time
+     * (folder, subfolder, quality, audio language, naming, duplicate policy).
+     * When no batch is ACTIVE the new batch starts immediately, otherwise it is QUEUED
+     * behind the existing batches and runs automatically when its turn comes
+     * (sequential FIFO, oldest first).
+     *
+     * @return 0 when the batch became ACTIVE at once, otherwise its 1-based position
+     * among the QUEUED batches
      */
     fun startBatch(
         playlistName: String,
@@ -214,22 +231,18 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         serviceId: Int,
         items: List<PlaylistBatchItem>,
         options: PlaylistDownloadOptions,
-        overrides: Map<String, PerItemOverride>,
-        replace: Boolean = false
-    ): Boolean {
-        if (hasUnfinishedBatch() && !replace) {
-            Log.d(TAG, "startBatch: batch already active, replace=$replace, returning false")
-            return false
-        }
-        Log.d(TAG, "startBatch: playlistName=$playlistName, items=${items.size}, replace=$replace")
+        overrides: Map<String, PerItemOverride>
+    ): Int {
+        Log.d(TAG, "startBatch: playlistName=$playlistName, items=${items.size}")
         val now = System.currentTimeMillis()
-        val newRecord = BatchRecord(
+        val fresh = BatchRecord(
             id = UUID.randomUUID().toString(),
             playlistName = playlistName,
             playlistUrl = playlistUrl,
             serviceId = serviceId,
             createdAt = now,
             status = BatchStatus.RUNNING,
+            queueState = BatchQueueState.QUEUED,
             options = options,
             items = items.map { item ->
                 BatchItemRecord(
@@ -243,17 +256,41 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 )
             }
         )
-        Log.d(TAG, "startBatch: created BatchRecord id=${newRecord.id} with ${newRecord.items.size} items")
-        record = newRecord
-        liveMissions.clear()
-        speedSamples.clear()
-        cooldownUntil = 0L
+        Log.d(TAG, "startBatch: created BatchRecord id=${fresh.id} with ${fresh.items.size} items")
+        if (record == null) {
+            if (otherBatches.any { it.queueState == BatchQueueState.QUEUED }) {
+                // Should not happen (finish/advance keeps the invariant), but a new
+                // batch must never jump the line: enqueue it, then start the oldest.
+                otherBatches = otherBatches + fresh
+                Log.d(TAG, "batch added id=${fresh.id} state=QUEUED")
+                persist()
+                activateNextBatch()
+                return queuedPosition(fresh.id)
+            }
+            record = fresh.copy(queueState = BatchQueueState.ACTIVE)
+            liveMissions.clear()
+            speedSamples.clear()
+            cooldownUntil = 0L
+            Log.d(TAG, "batch added id=${fresh.id} state=ACTIVE")
+            persist()
+            ensureBound { pump() }
+            checkLowSpace()
+            return 0
+        }
+        otherBatches = otherBatches + fresh
+        val position = queuedPosition(fresh.id)
+        Log.d(TAG, "batch added id=${fresh.id} state=QUEUED position=$position")
         persist()
-        ensureBound { pump() }
-        checkLowSpace()
-        return true
+        return position
     }
 
+    /** 1-based position of [batchId] among the QUEUED batches (0 when not queued). */
+    private fun queuedPosition(batchId: String): Int {
+        return otherBatches.filter { it.queueState == BatchQueueState.QUEUED }
+            .indexOfFirst { it.id == batchId } + 1
+    }
+
+    /** Pauses the ACTIVE batch only; queued batches are untouched. */
     fun pauseBatch() {
         val current = record ?: return
         record = current.copy(status = BatchStatus.PAUSED)
@@ -262,6 +299,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         publish()
     }
 
+    /** Resumes the ACTIVE batch only; queued batches are untouched. */
     fun resumeBatch() {
         val current = record ?: return
         if (isTerminal(current.status)) {
@@ -275,6 +313,11 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
     }
 
+    /**
+     * Cancels the ACTIVE batch only (queued batches are untouched): deletes its live
+     * missions, marks busy items CANCELLED, marks the batch DONE and automatically
+     * starts the next QUEUED batch, if any.
+     */
     fun cancelBatch() {
         val current = record ?: return
         deleteActiveMissions()
@@ -285,16 +328,13 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 item
             }
         }
-        record = current.copy(status = BatchStatus.CANCELLED, items = items)
-        persist()
-        stopWifiCallback()
-        publish()
+        finishActiveBatch(current.copy(status = BatchStatus.CANCELLED, items = items))
     }
 
     /**
-     * Clears a stuck batch: deletes all active missions, marks all non-completed
-     * items as FAILED (so user can retry), and clears the batch record.
-     * Use this when the batch is permanently stuck.
+     * Clears a stuck ACTIVE batch: deletes all active missions, marks all non-completed
+     * items as FAILED (so the user can retry), marks the batch DONE and starts the
+     * next QUEUED batch, if any. Use this when the batch is permanently stuck.
      */
     fun clearStuckBatch() {
         val current = record ?: return
@@ -307,10 +347,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 item
             }
         }
-        record = current.copy(status = BatchStatus.CANCELLED, items = items)
-        persist()
-        stopWifiCallback()
-        publish()
+        finishActiveBatch(current.copy(status = BatchStatus.CANCELLED, items = items))
     }
 
     fun retryItem(url: String) {
@@ -451,6 +488,65 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         postMessage(appContext.getString(R.string.playlist_batch_pick_folder))
     }
 
+    /**
+     * Cancels a QUEUED batch (the ACTIVE batch is untouched): marks its pending items
+     * CANCELLED and moves the batch to DONE. Cancelling the ACTIVE batch instead uses
+     * [cancelBatch], which also starts the next queued batch.
+     *
+     * @param batchId the id of the queued batch to cancel
+     */
+    fun cancelQueuedBatch(batchId: String) {
+        val target = otherBatches.firstOrNull {
+            it.id == batchId && it.queueState == BatchQueueState.QUEUED
+        } ?: return
+        Log.d(TAG, "cancel queued batch id=$batchId name=${target.playlistName}")
+        val done = target.copy(
+            status = BatchStatus.CANCELLED,
+            queueState = BatchQueueState.DONE,
+            items = target.items.map { item ->
+                if (!isTerminalItem(item.status)) {
+                    item.copy(status = BatchItemStatus.CANCELLED)
+                } else {
+                    item
+                }
+            }
+        )
+        otherBatches = otherBatches.map { if (it.id == batchId) done else it }
+        persist()
+    }
+
+    /**
+     * Moves a QUEUED batch up ([delta] negative) or down ([delta] positive) within the
+     * queued section. DONE batches and the ACTIVE batch never move.
+     *
+     * @param batchId the id of the queued batch to move
+     * @param delta positions to move: negative moves up, positive moves down
+     */
+    fun moveQueuedBatch(batchId: String, delta: Int) {
+        val queuedIds = otherBatches
+            .filter { it.queueState == BatchQueueState.QUEUED }
+            .map { it.id }
+        val from = queuedIds.indexOf(batchId)
+        if (from < 0 || delta == 0) {
+            return
+        }
+        val to = (from + delta).coerceIn(queuedIds.indices)
+        if (to == from) {
+            return
+        }
+        val mutable = otherBatches.toMutableList()
+        val fromPos = mutable.indexOfFirst { it.id == queuedIds[from] }
+        val toPos = mutable.indexOfFirst { it.id == queuedIds[to] }
+        if (fromPos < 0 || toPos < 0) {
+            return
+        }
+        val moved = mutable.removeAt(fromPos)
+        mutable.add(toPos, moved)
+        otherBatches = mutable
+        Log.d(TAG, "moved queued batch id=$batchId from=$from to=$to")
+        persist()
+    }
+
     /** Loads persisted state for the queue screen (no-op when already loaded). */
     fun restoreIfNeeded() {
         if (record != null) {
@@ -458,10 +554,43 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             publish()
             return
         }
-        record = BatchStore.load(appContext)
+        val loaded = BatchStore.loadQueue(appContext)
+        Log.d(TAG, "restoreIfNeeded: loaded ${loaded.size} batches from store")
+        if (loaded.isEmpty()) {
+            publish()
+            return
+        }
+        val actives = loaded.filter { it.queueState == BatchQueueState.ACTIVE }
+        val firstActive = actives.firstOrNull()
+        val demoted = actives.drop(1).map { it.copy(queueState = BatchQueueState.QUEUED) }
+        if (demoted.isNotEmpty()) {
+            Log.d(TAG, "restoreIfNeeded: demoted ${demoted.size} extra ACTIVE batches to QUEUED")
+        }
+        val queued = loaded.filter { it.queueState == BatchQueueState.QUEUED }
+        val done = loaded.filter { it.queueState == BatchQueueState.DONE }
+        otherBatches = demoted + queued + done
+        if (firstActive != null && !isTerminal(firstActive.status)) {
+            record = firstActive
+        } else {
+            if (firstActive != null) {
+                Log.d(
+                    TAG,
+                    "restoreIfNeeded: persisted ACTIVE batch ${firstActive.id} " +
+                        "is terminal, marking DONE"
+                )
+                otherBatches = otherBatches + firstActive.copy(queueState = BatchQueueState.DONE)
+            }
+            // No ACTIVE batch after a restart: start the oldest queued one.
+            activateNextBatch()
+        }
         val restored = record
-        Log.d(TAG, "restoreIfNeeded: loaded from store: ${if (restored != null) "id=${restored.id}, items=${restored.items.size}, status=${restored.status}" else "null"}")
-        publish()
+        Log.d(
+            TAG,
+            "restoreIfNeeded: active=${restored?.id} " +
+                "queued=${otherBatches.count { it.queueState == BatchQueueState.QUEUED }} " +
+                "done=${otherBatches.count { it.queueState == BatchQueueState.DONE }}"
+        )
+        persist()
         if (restored != null && !isTerminal(restored.status)) {
             ensureBound { pump() }
         }
@@ -509,11 +638,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     }
 
     private fun persist() {
-        val current = record ?: return
         try {
-            BatchStore.save(appContext, current)
+            BatchStore.saveQueue(appContext, listOfNotNull(record) + otherBatches)
         } catch (e: Exception) {
-            // store is best-effort; the batch continues in memory
+            // store is best-effort; the batches continue in memory
         }
         publish()
     }
@@ -1373,12 +1501,119 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         if (busy) {
             return
         }
-        record = current.copy(status = BatchStatus.COMPLETED)
-        persist()
-        stopWifiCallback()
-        if (current.askLanguageUrls.isNotEmpty()) {
-            _askLanguageEvent.value = BatchEvent(current.askLanguageUrls)
+        val askUrls = current.askLanguageUrls
+        finishActiveBatch(current.copy(status = BatchStatus.COMPLETED))
+        if (askUrls.isNotEmpty()) {
+            _askLanguageEvent.value = BatchEvent(askUrls)
         }
+    }
+
+    /**
+     * Marks the ACTIVE batch DONE and automatically starts the next QUEUED batch
+     * (oldest first). Failed items never block the next batch: a batch is done once
+     * none of its items is busy (completed/failed/skipped/cancelled all count as done).
+     *
+     * @param finished the ACTIVE batch in its final state
+     */
+    private fun finishActiveBatch(finished: BatchRecord) {
+        val completed = finished.items.count { it.status == BatchItemStatus.COMPLETED }
+        val failed = finished.items.count { it.status == BatchItemStatus.FAILED }
+        Log.d(
+            TAG,
+            "batch done id=${finished.id} status=${finished.status} " +
+                "completed=$completed failed=$failed total=${finished.items.size}"
+        )
+        otherBatches = otherBatches + finished.copy(queueState = BatchQueueState.DONE)
+        record = null
+        stopWifiCallback()
+        persist()
+        activateNextBatch()
+        record?.let { Log.d(TAG, "next batch started id=${it.id} name=${it.playlistName}") }
+    }
+
+    /**
+     * Starts the oldest QUEUED batch (FIFO). No-op when the queue is empty.
+     * Only the ACTIVE batch runs items; queued batches wait untouched.
+     */
+    private fun activateNextBatch() {
+        val index = otherBatches.indexOfFirst { it.queueState == BatchQueueState.QUEUED }
+        if (index < 0) {
+            record = null
+            persist()
+            return
+        }
+        val next = otherBatches[index]
+        otherBatches = otherBatches.filterNot { it.id == next.id }
+        if (isTerminal(next.status)) {
+            Log.d(TAG, "activateNextBatch: queued batch ${next.id} is terminal, marking DONE")
+            otherBatches = otherBatches + next.copy(queueState = BatchQueueState.DONE)
+            persist()
+            activateNextBatch()
+            return
+        }
+        record = next.copy(queueState = BatchQueueState.ACTIVE)
+        liveMissions.clear()
+        speedSamples.clear()
+        cooldownUntil = 0L
+        Log.d(TAG, "batch activated id=${next.id} name=${next.playlistName}")
+        persist()
+        ensureBound { pump() }
+        checkLowSpace()
+    }
+
+    /**
+     * Static item list for a non-ACTIVE batch (queued or done), for the item screen.
+     * Returns null for the ACTIVE batch (use the live [uiState]) and unknown ids.
+     *
+     * @param batchId the id of the batch to snapshot
+     * @return the item screen state, or null
+     */
+    fun itemsSnapshot(batchId: String): BatchUiState? {
+        if (record?.id == batchId) {
+            return null
+        }
+        val batch = otherBatches.firstOrNull { it.id == batchId } ?: return null
+        val items = batch.items.map { item ->
+            BatchItemUiState(
+                url = item.url,
+                title = item.title,
+                position = item.position,
+                status = item.status,
+                fraction = if (item.status == BatchItemStatus.COMPLETED) {
+                    1.0
+                } else {
+                    item.lastProgress
+                },
+                speedBytesPerSec = 0L,
+                etaSeconds = -1L,
+                errorText = item.failureReason,
+                retryCount = item.retryCount,
+                languageNote = if (item.status == BatchItemStatus.SKIPPED) {
+                    item.failureReason
+                } else {
+                    null
+                }
+            )
+        }
+        val completed = batch.items.count { it.status == BatchItemStatus.COMPLETED }
+        val failed = batch.items.count { it.status == BatchItemStatus.FAILED }
+        val overall = if (items.isEmpty()) {
+            0.0
+        } else {
+            items.sumOf { it.fraction } / items.size
+        }
+        return BatchUiState(
+            batchId = batch.id,
+            playlistName = batch.playlistName,
+            batchStatus = batch.status,
+            waitingWifi = false,
+            needsFolder = false,
+            items = items,
+            completedCount = completed,
+            failedCount = failed,
+            totalCount = items.size,
+            overallFraction = overall
+        )
     }
 
     private fun checkLowSpace() {
@@ -1470,6 +1705,33 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         wifiCallbackRegistered = false
     }
 
+    /** One summary per batch (ACTIVE first, then QUEUED, then DONE) for the batch list. */
+    private fun batchSummaries(): List<BatchSummary> {
+        return (listOfNotNull(record) + otherBatches).map { batch ->
+            val completed = batch.items.count { it.status == BatchItemStatus.COMPLETED }
+            val failed = batch.items.count { it.status == BatchItemStatus.FAILED }
+            val total = batch.items.size
+            val overall = if (total == 0) {
+                0.0
+            } else {
+                batch.items.sumOf { item ->
+                    if (item.status == BatchItemStatus.COMPLETED) 1.0 else item.lastProgress
+                } / total
+            }
+            BatchSummary(
+                batchId = batch.id,
+                playlistName = batch.playlistName,
+                queueState = batch.queueState,
+                batchStatus = batch.status,
+                totalCount = total,
+                completedCount = completed,
+                failedCount = failed,
+                overallFraction = overall,
+                createdAt = batch.createdAt
+            )
+        }
+    }
+
     private fun postMessage(text: String) {
         _messageEvent.value = BatchEvent(text)
     }
@@ -1490,6 +1752,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     }
 
     private fun publish() {
+        _batchList.value = batchSummaries()
         val current = record
         if (current == null) {
             _uiState.value = BatchUiState(

@@ -5,163 +5,214 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- Batch list (sequential FIFO queue) -->
     <LinearLayout
+        android:id="@+id/batchListView"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
 
         <TextView
-            android:id="@+id/queuePlaylistNameView"
+            android:id="@+id/batchesTitleView"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:ellipsize="end"
-            android:maxLines="2"
+            android:paddingStart="16dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="16dp"
+            android:text="@string/playlist_batch_list_title"
             android:textAppearance="?android:attr/textAppearanceMedium"
-            android:textStyle="bold"
-            tools:text="Playlist name" />
+            android:textStyle="bold" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/batchList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:scrollbars="vertical" />
 
         <TextView
-            android:id="@+id/queueCountsView"
+            android:id="@+id/batchesEmptyView"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            tools:text="2 of 10 completed" />
-
-        <ProgressBar
-            android:id="@+id/queueOverallProgress"
-            style="@style/Widget.AppCompat.ProgressBar.Horizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:max="100"
-            android:progress="0"
-            tools:progress="40" />
-
-        <TextView
-            android:id="@+id/queueStatusView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            tools:text="Downloading…" />
-
-        <TextView
-            android:id="@+id/queueDetailStatusView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            tools:text="Resolving 1/5 • Waiting for Wi-Fi"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="@string/playlist_batch_no_batches"
+            android:textSize="16sp"
+            android:visibility="gone"
             tools:visibility="visible" />
+
+    </LinearLayout>
+
+    <!-- Item view of the selected batch (reuses the existing item screen) -->
+    <LinearLayout
+        android:id="@+id/batchItemView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone"
+        tools:visibility="visible">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:orientation="vertical"
+            android:padding="16dp">
 
-            <Button
-                android:id="@+id/pauseResumeButton"
-                android:layout_width="0dp"
+            <TextView
+                android:id="@+id/queuePlaylistNameView"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/playlist_batch_pause"
-                android:textSize="12sp" />
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textAppearance="?android:attr/textAppearanceMedium"
+                android:textStyle="bold"
+                tools:text="Playlist name" />
 
-            <Button
-                android:id="@+id/cancelAllButton"
-                android:layout_width="0dp"
+            <TextView
+                android:id="@+id/queueCountsView"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@string/playlist_batch_cancel_all"
-                android:textSize="12sp" />
+                android:layout_marginTop="2dp"
+                android:textAppearance="?android:attr/textAppearanceSmall"
+                tools:text="2 of 10 completed" />
 
-            <Button
-                android:id="@+id/pickFolderButton"
-                android:layout_width="0dp"
+            <ProgressBar
+                android:id="@+id/queueOverallProgress"
+                style="@style/Widget.AppCompat.ProgressBar.Horizontal"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@string/playlist_batch_pick_folder"
-                android:textSize="12sp"
-                android:visibility="gone"
-                tools:visibility="gone" />
+                android:layout_marginTop="8dp"
+                android:max="100"
+                android:progress="0"
+                tools:progress="40" />
+
+            <TextView
+                android:id="@+id/queueStatusView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="?android:attr/textAppearanceSmall"
+                tools:text="Downloading…" />
+
+            <TextView
+                android:id="@+id/queueDetailStatusView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textAppearance="?android:attr/textAppearanceSmall"
+                tools:text="Resolving 1/5 • Waiting for Wi-Fi"
+                tools:visibility="visible" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/pauseResumeButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/playlist_batch_pause"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/cancelAllButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/playlist_batch_cancel_all"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/pickFolderButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/playlist_batch_pick_folder"
+                    android:textSize="12sp"
+                    android:visibility="gone"
+                    tools:visibility="gone" />
+
+            </LinearLayout>
 
         </LinearLayout>
 
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp">
-
-        <Button
-            android:id="@+id/filterAllButton"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/playlist_batch_filter_all"
-            android:textSize="12sp" />
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
 
-        <Button
-            android:id="@+id/filterCompletedButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:text="@string/playlist_batch_filter_completed"
-            android:textSize="12sp" />
+            <Button
+                android:id="@+id/filterAllButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/playlist_batch_filter_all"
+                android:textSize="12sp" />
 
-        <Button
-            android:id="@+id/filterFailedButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:text="@string/playlist_batch_filter_failed"
-            android:textSize="12sp" />
+            <Button
+                android:id="@+id/filterCompletedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="@string/playlist_batch_filter_completed"
+                android:textSize="12sp" />
 
-    </LinearLayout>
+            <Button
+                android:id="@+id/filterFailedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:text="@string/playlist_batch_filter_failed"
+                android:textSize="12sp" />
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/queueList"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:scrollbars="vertical" />
+        </LinearLayout>
 
-    <!-- Empty state -->
-    <LinearLayout
-        android:id="@+id/queueEmptyView"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="24dp"
-        android:visibility="gone"
-        tools:visibility="visible">
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/queueList"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:scrollbars="vertical" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:text="(ಠ_ಠ)"
-            android:textSize="35sp" />
+        <!-- Empty state -->
+        <LinearLayout
+            android:id="@+id/queueEmptyView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="24dp"
+            android:visibility="gone"
+            tools:visibility="visible">
 
-        <TextView
-            android:id="@+id/queueEmptyMessageView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/playlist_batch_queue_empty"
-            android:textSize="16sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:text="(ಠ_ಠ)"
+                android:textSize="35sp" />
+
+            <TextView
+                android:id="@+id/queueEmptyMessageView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/playlist_batch_queue_empty"
+                android:textSize="16sp" />
+
+        </LinearLayout>
 
     </LinearLayout>
 
