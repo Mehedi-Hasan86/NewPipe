@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
+import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
@@ -110,6 +111,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
         /** HTTP 403 (DownloadMission.ERROR_HTTP_FORBIDDEN is package-private). */
         private const val HTTP_FORBIDDEN = 403
+
+        private const val TAG = "PlaylistBatch"
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -191,10 +194,6 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     // ------------------------------------------------------------------
 
     /** True when a non-terminal batch is persisted (caller asks to replace it). */
-    private companion object {
-        private const val TAG = "PlaylistBatch"
-    }
-
     fun hasUnfinishedBatch(): Boolean {
         val current = record ?: BatchStore.load(appContext)
         if (current == null || isTerminal(current.status)) {
@@ -224,7 +223,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
         Log.d(TAG, "startBatch: playlistName=$playlistName, items=${items.size}, replace=$replace")
         val now = System.currentTimeMillis()
-        record = BatchRecord(
+        val newRecord = BatchRecord(
             id = UUID.randomUUID().toString(),
             playlistName = playlistName,
             playlistUrl = playlistUrl,
@@ -244,7 +243,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 )
             }
         )
-        Log.d(TAG, "startBatch: created BatchRecord id=${record.id} with ${record.items.size} items")
+        Log.d(TAG, "startBatch: created BatchRecord id=${newRecord.id} with ${newRecord.items.size} items")
+        record = newRecord
         liveMissions.clear()
         speedSamples.clear()
         cooldownUntil = 0L
@@ -449,9 +449,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             return
         }
         record = BatchStore.load(appContext)
-        Log.d(TAG, "restoreIfNeeded: loaded from store: ${if (record != null) "id=${record.id}, items=${record.items.size}, status=${record.status}" else "null"}")
+        val restored = record
+        Log.d(TAG, "restoreIfNeeded: loaded from store: ${if (restored != null) "id=${restored.id}, items=${restored.items.size}, status=${restored.status}" else "null"}")
         publish()
-        if (record != null && !isTerminal(record!!.status)) {
+        if (restored != null && !isTerminal(restored.status)) {
             ensureBound { pump() }
         }
     }
@@ -1204,10 +1205,12 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                         Log.d(TAG, "reconcileAfterRestart: mission finished for ${item.url}")
                         item.copy(status = BatchItemStatus.COMPLETED, lastProgress = 1.0)
                     }
+
                     mission.running || mission.enqueued -> {
                         Log.d(TAG, "reconcileAfterRestart: mission running/enqueued for ${item.url}")
                         item.copy(status = BatchItemStatus.DOWNLOADING)
                     }
+
                     else -> {
                         Log.d(TAG, "reconcileAfterRestart: mission not running for ${item.url}, marking PENDING")
                         item.copy(status = BatchItemStatus.PENDING, failureReason = null)

@@ -241,7 +241,8 @@ class PlaylistBatchFragment : Fragment() {
                 serviceId = viewModel.currentServiceId(),
                 items = selected,
                 options = options,
-                overrides = overrides
+                overrides = overrides,
+                replace = replace
             )
         ) {
             Toast.makeText(

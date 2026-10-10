@@ -597,12 +597,20 @@ public final class NavigationHelper {
     }
 
     /**
-     * Opens the playlist batch queue screen via an intent.
+     * Opens the playlist batch queue screen in its own activity.
+     *
+     * <p>Uses a try/catch with log tag {@code PlaylistBatch} so that a navigation failure
+     * never crashes the caller (e.g. a batch that is already starting).</p>
      *
      * @param context the context used to start the batch queue activity
      */
     public static void openPlaylistBatchQueue(final Context context) {
-        context.startActivity(new Intent(context, PlaylistBatchQueueActivity.class));
+        try {
+            context.startActivity(new Intent(context, PlaylistBatchQueueActivity.class));
+        } catch (final Exception e) {
+            android.util.Log.e("PlaylistBatch",
+                    "openPlaylistBatchQueue: failed to open queue activity", e);
+        }
     }
 
     public static void openFeedFragment(final FragmentManager fragmentManager) {
