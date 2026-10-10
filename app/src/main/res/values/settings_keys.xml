@@ -234,6 +234,23 @@
 
     <string name="prefer_original_audio_key">prefer_original_audio</string>
     <string name="prefer_descriptive_audio_key">prefer_descriptive_audio</string>
+    <!-- Playlist batch download options (last-used globals, restored on next open) -->
+    <string name="playlist_batch_mode_key">playlist_batch_mode</string>
+    <string name="playlist_batch_resolution_key">playlist_batch_resolution</string>
+    <string name="playlist_batch_video_container_key">playlist_batch_video_container</string>
+    <string name="playlist_batch_fallback_best_key">playlist_batch_fallback_best</string>
+    <string name="playlist_batch_audio_container_key">playlist_batch_audio_container</string>
+    <string name="playlist_batch_audio_highest_bitrate_key">playlist_batch_audio_highest_bitrate</string>
+    <string name="playlist_batch_subs_enabled_key">playlist_batch_subs_enabled</string>
+    <string name="playlist_batch_subs_languages_key">playlist_batch_subs_languages</string>
+    <string name="playlist_batch_subs_prefer_manual_key">playlist_batch_subs_prefer_manual</string>
+    <string name="playlist_batch_subs_include_auto_key">playlist_batch_subs_include_auto</string>
+    <string name="playlist_batch_audio_language_key">playlist_batch_audio_language</string>
+    <string name="playlist_batch_missing_language_action_key">playlist_batch_missing_language_action</string>
+    <string name="playlist_batch_subfolder_key">playlist_batch_subfolder</string>
+    <string name="playlist_batch_template_key">playlist_batch_template</string>
+    <string name="playlist_batch_duplicate_action_key">playlist_batch_duplicate_action</string>
+    <string name="playlist_batch_language_suffix_key">playlist_batch_language_suffix</string>
     <string name="last_resize_mode">last_resize_mode</string>
 
     <string name="reset_settings">reset_settings</string>

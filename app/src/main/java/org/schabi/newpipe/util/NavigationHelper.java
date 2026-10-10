@@ -34,6 +34,8 @@ import org.schabi.newpipe.R;
 import org.schabi.newpipe.RouterActivity;
 import org.schabi.newpipe.database.feed.model.FeedGroupEntity;
 import org.schabi.newpipe.download.DownloadActivity;
+import org.schabi.newpipe.download.playlist.PlaylistBatchActivity;
+import org.schabi.newpipe.download.playlist.PlaylistBatchFragment;
 import org.schabi.newpipe.error.ErrorUtil;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.StreamingService;
@@ -557,6 +559,40 @@ public final class NavigationHelper {
                 .replace(R.id.fragment_holder, PlaylistFragment.getInstance(serviceId, url, name))
                 .addToBackStack(null)
                 .commit();
+    }
+
+    /**
+     * Opens the playlist batch download screen (intake + selection UI only, no downloading yet)
+     * for a remote playlist.
+     *
+     * @param fragmentManager the fragment manager in which to open the batch screen
+     * @param serviceId the id of the streaming service the playlist belongs to
+     * @param url the playlist URL to load
+     * @param name the playlist name to show initially, may be null
+     */
+    public static void openPlaylistBatchDownload(final FragmentManager fragmentManager,
+                                                final int serviceId, final String url,
+                                                @Nullable final String name) {
+        defaultTransaction(fragmentManager)
+                .replace(R.id.fragment_holder,
+                        PlaylistBatchFragment.newInstance(serviceId, url, name))
+                .addToBackStack(null)
+                .commit();
+    }
+
+    /**
+     * Opens the playlist batch download screen (intake + selection UI only, no downloading yet)
+     * via intent, e.g. from the playlist screen context.
+     *
+     * @param context the context used to start the batch download activity
+     * @param serviceId the id of the streaming service the playlist belongs to
+     * @param url the playlist URL to load
+     * @param name the playlist name to show initially, may be null
+     */
+    public static void openPlaylistBatchDownload(final Context context,
+                                                final int serviceId, final String url,
+                                                @Nullable final String name) {
+        context.startActivity(PlaylistBatchActivity.newIntent(context, serviceId, url, name));
     }
 
     public static void openFeedFragment(final FragmentManager fragmentManager) {

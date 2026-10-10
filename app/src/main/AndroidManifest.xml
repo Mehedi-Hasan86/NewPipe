@@ -136,6 +136,11 @@
             android:label="@string/app_name"
             android:launchMode="singleTask" />
 
+        <activity
+            android:name=".download.playlist.PlaylistBatchActivity"
+            android:exported="false"
+            android:label="@string/playlist_batch_title" />
+
         <service android:name="us.shandian.giga.service.DownloadManagerService"
             android:foregroundServiceType="dataSync" />
 

@@ -474,6 +474,81 @@
     <string name="playlist_add_stream_success_duplicate">Duplicate added %d time(s)</string>
     <string name="playlist_thumbnail_change_success">Playlist thumbnail changed.</string>
     <string name="playlist_no_uploader">Auto-generated (no uploader found)</string>
+    <!-- Playlist batch download (STEP 1: intake + selection, no downloading yet) -->
+    <string name="download_playlist">Download playlist</string>
+    <string name="playlist_batch_title">Playlist download</string>
+    <string name="playlist_batch_url_hint">Paste playlist or watch-with-list URL</string>
+    <string name="playlist_batch_load">Load</string>
+    <string name="playlist_batch_select_all">Select all</string>
+    <string name="playlist_batch_deselect_all">Deselect all</string>
+    <string name="playlist_batch_range_from">From (e.g. 5)</string>
+    <string name="playlist_batch_range_to">To (e.g. 20)</string>
+    <string name="playlist_batch_range_select">Select range</string>
+    <string name="playlist_batch_range_invalid">Enter a valid range, e.g. 5 to 20</string>
+    <string name="playlist_batch_empty">No videos loaded yet</string>
+    <string name="playlist_batch_videos_loaded_more">%1$d loaded…</string>
+    <plurals name="playlist_batch_selected">
+        <item quantity="one">%d selected</item>
+        <item quantity="other">%d selected</item>
+    </plurals>
+    <plurals name="playlist_batch_skipped">
+        <item quantity="one">%d unavailable item skipped</item>
+        <item quantity="other">%d unavailable items skipped</item>
+    </plurals>
+    <string name="playlist_batch_invalid_url">Invalid playlist URL. Paste a playlist link or a watch link containing “list=”.</string>
+    <string name="playlist_batch_no_internet">No internet connection. Check your network and retry.</string>
+    <string name="playlist_batch_rate_limited">Rate limited. Please wait a while and retry.</string>
+    <string name="playlist_batch_not_available">This playlist is not available (private, deleted or region-blocked).</string>
+    <string name="playlist_batch_error_unknown">Could not load the playlist.</string>
+    <!-- Playlist batch download options (STEP 2: options UI only, no downloading yet) -->
+    <string name="playlist_batch_download_options">Download options</string>
+    <string name="playlist_batch_start_download">Start download</string>
+    <string name="playlist_batch_save_options">Save</string>
+    <string name="playlist_batch_item_options">Item options</string>
+    <string name="playlist_batch_item_options_title">Options for this video</string>
+    <string name="playlist_batch_mode">Download mode</string>
+    <string name="playlist_batch_mode_video">Video</string>
+    <string name="playlist_batch_mode_audio">Audio only</string>
+    <string name="playlist_batch_target_quality">Preferred quality (max)</string>
+    <string name="playlist_batch_video_format">Video format</string>
+    <string name="playlist_batch_container_mp4">MP4</string>
+    <string name="playlist_batch_container_webm_video">WebM</string>
+    <string name="playlist_batch_fallback_best">Use best available quality if the chosen one is missing</string>
+    <string name="playlist_batch_audio_format">Audio format</string>
+    <string name="playlist_batch_container_m4a">M4A</string>
+    <string name="playlist_batch_container_opus">WebM Opus</string>
+    <string name="playlist_batch_audio_bitrate">Audio bitrate</string>
+    <string name="playlist_batch_bitrate_highest">Highest</string>
+    <string name="playlist_batch_bitrate_lowest">Lowest</string>
+    <string name="playlist_batch_audio_language">Preferred audio language</string>
+    <string name="playlist_batch_audio_original">Original</string>
+    <string name="playlist_batch_missing_language">If the preferred language is missing</string>
+    <string name="playlist_batch_missing_use_original">Use the Original track</string>
+    <string name="playlist_batch_missing_skip">Skip the item (mark “Language not available”)</string>
+    <string name="playlist_batch_missing_ask">Collect affected items and ask at the end</string>
+    <string name="playlist_batch_subtitles">Download subtitles</string>
+    <string name="playlist_batch_subtitle_languages">Subtitle languages</string>
+    <string name="playlist_batch_prefer_manual_subs">Prefer manual over auto-generated subtitles</string>
+    <string name="playlist_batch_include_auto_subs">Include auto-generated subtitles</string>
+    <string name="playlist_batch_subfolder">Save in a subfolder named after the playlist</string>
+    <string name="playlist_batch_template">File name template</string>
+    <string name="playlist_batch_template_hint">{index} - {title}</string>
+    <string name="playlist_batch_duplicates">If the file already exists</string>
+    <string name="playlist_batch_duplicate_overwrite">Overwrite</string>
+    <string name="playlist_batch_duplicate_rename">Rename (unique name)</string>
+    <string name="playlist_batch_duplicate_skip">Skip</string>
+    <string name="playlist_batch_language_suffix">Append [language] for non-original audio</string>
+    <string name="playlist_batch_filename_preview">File name preview (first selected item)</string>
+    <string name="playlist_batch_preview_none">Select at least one video to preview the file name.</string>
+    <string name="playlist_batch_use_global">Use global option</string>
+    <string name="playlist_batch_clear_override">Clear override</string>
+    <string name="playlist_batch_item_load_error">Could not load stream info for this video.</string>
+    <string name="playlist_batch_no_subtitles">No subtitles available for this video.</string>
+    <string name="playlist_batch_available_subtitles">Available subtitles: %1$s</string>
+    <plurals name="playlist_batch_audio_tracks">
+        <item quantity="one">%d audio language</item>
+        <item quantity="other">%d audio languages</item>
+    </plurals>
     <!-- Players -->
     <string name="caption_none">No Captions</string>
     <string name="resize_fit">Fit</string>

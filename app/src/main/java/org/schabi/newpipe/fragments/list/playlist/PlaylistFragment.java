@@ -252,6 +252,8 @@ public class PlaylistFragment extends BaseListInfoFragment<StreamInfoItem, Playl
                         dialog -> dialog.show(getFM(), TAG)
                 ));
             }
+        } else if (itemId == R.id.menu_item_download_playlist) {
+            NavigationHelper.openPlaylistBatchDownload(requireContext(), serviceId, url, name);
         } else {
             return super.onOptionsItemSelected(item);
         }
