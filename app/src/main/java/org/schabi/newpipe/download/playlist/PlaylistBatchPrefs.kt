@@ -93,7 +93,19 @@ object PlaylistBatchPrefs {
             appendLanguageSuffix = prefs.getBoolean(
                 context.getString(R.string.playlist_batch_language_suffix_key),
                 true
-            )
+            ),
+            parallelVideos = prefs.getInt(
+                context.getString(R.string.playlist_batch_parallel_key),
+                PlaylistDownloadOptions.DEFAULT_PARALLEL_VIDEOS
+            ).coerceIn(1, PlaylistDownloadOptions.MAX_PARALLEL_VIDEOS),
+            wifiOnly = prefs.getBoolean(
+                context.getString(R.string.playlist_batch_wifi_only_key),
+                false
+            ),
+            maxRetries = prefs.getInt(
+                context.getString(R.string.playlist_batch_max_retries_key),
+                PlaylistDownloadOptions.DEFAULT_MAX_RETRIES
+            ).coerceIn(0, PlaylistDownloadOptions.MAX_RETRIES)
         )
     }
 
@@ -162,6 +174,18 @@ object PlaylistBatchPrefs {
             .putBoolean(
                 context.getString(R.string.playlist_batch_language_suffix_key),
                 options.appendLanguageSuffix
+            )
+            .putInt(
+                context.getString(R.string.playlist_batch_parallel_key),
+                options.parallelVideos.coerceIn(1, PlaylistDownloadOptions.MAX_PARALLEL_VIDEOS)
+            )
+            .putBoolean(
+                context.getString(R.string.playlist_batch_wifi_only_key),
+                options.wifiOnly
+            )
+            .putInt(
+                context.getString(R.string.playlist_batch_max_retries_key),
+                options.maxRetries.coerceIn(0, PlaylistDownloadOptions.MAX_RETRIES)
             )
             .apply()
     }

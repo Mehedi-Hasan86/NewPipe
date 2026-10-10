@@ -10,6 +10,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -19,10 +20,11 @@ import org.schabi.newpipe.databinding.FragmentPlaylistBatchBinding
 import org.schabi.newpipe.extractor.ListExtractor
 import org.schabi.newpipe.util.Localization
 import org.schabi.newpipe.util.NO_SERVICE_ID
+import org.schabi.newpipe.util.NavigationHelper
 
 /**
- * STEP 1 only: playlist intake + item list + checkbox selection.
- * No downloading is started from here yet.
+ * Playlist batch intake + item list + checkbox selection, with download
+ * options and handoff to the batch queue screen (Start download).
  */
 class PlaylistBatchFragment : Fragment() {
 
@@ -92,6 +94,7 @@ class PlaylistBatchFragment : Fragment() {
         binding.deselectAllButton.setOnClickListener { viewModel.deselectAll() }
         binding.rangeSelectButton.setOnClickListener { applyRangeSelection() }
         binding.downloadOptionsButton.setOnClickListener { openGlobalOptions() }
+        binding.startDownloadButton.setOnClickListener { confirmStartDownload() }
 
         viewModel.loadOptions()
         observeViewModel()
@@ -170,6 +173,87 @@ class PlaylistBatchFragment : Fragment() {
             .show(childFragmentManager, "batch_item_options")
     }
 
+    private fun confirmStartDownload() {
+        val selected = viewModel.selectedItems()
+        if (selected.isEmpty()) {
+            return
+        }
+        viewModel.loadOptions()
+        val options = viewModel.options.value ?: PlaylistDownloadOptions()
+        val quality = if (options.mode == PlaylistBatchMode.AUDIO_ONLY) {
+            getString(R.string.playlist_batch_mode_audio)
+        } else {
+            options.targetResolution
+        }
+        val language = if (options.preferredAudioLanguage ==
+            PlaylistDownloadOptions.AUDIO_LANGUAGE_ORIGINAL
+        ) {
+            getString(R.string.playlist_batch_audio_original)
+        } else {
+            PlaylistBatchResolver.languageDisplayName(options.preferredAudioLanguage)
+        }
+        val message = getString(
+            R.string.playlist_batch_confirm_message,
+            selected.size,
+            quality,
+            language,
+            if (options.usePlaylistSubfolder) {
+                getString(R.string.playlist_batch_confirm_subfolder_yes)
+            } else {
+                getString(R.string.playlist_batch_confirm_subfolder_no)
+            }
+        )
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.playlist_batch_confirm_title)
+            .setMessage(message)
+            .setPositiveButton(R.string.playlist_batch_start_download) { _, _ ->
+                startBatch(selected, options, replace = false)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun startBatch(
+        selected: List<PlaylistBatchItem>,
+        options: PlaylistDownloadOptions,
+        replace: Boolean
+    ) {
+        val manager = BatchDownloadManager.getInstance(requireContext())
+        if (!replace && manager.hasUnfinishedBatch()) {
+            AlertDialog.Builder(requireContext())
+                .setMessage(R.string.playlist_batch_confirm_replace)
+                .setPositiveButton(R.string.playlist_batch_replace) { _, _ ->
+                    startBatch(selected, options, replace = true)
+                }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+            return
+        }
+        val overrides = selected.mapNotNull { item ->
+            viewModel.getOverride(item.url)?.let { item.url to it }
+        }.toMap()
+        val header = viewModel.header.value
+        val playlistName = header?.name?.takeIf { it.isNotBlank() }
+            ?: initialArgs().third.orEmpty()
+        if (!manager.startBatch(
+                playlistName = playlistName,
+                playlistUrl = viewModel.currentUrl(),
+                serviceId = viewModel.currentServiceId(),
+                items = selected,
+                options = options,
+                overrides = overrides
+            )
+        ) {
+            Toast.makeText(
+                requireContext(),
+                R.string.playlist_batch_batch_busy,
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        NavigationHelper.openPlaylistBatchQueue(parentFragmentManager)
+    }
+
     // ------------------------------------------------------------------
 
     private fun observeViewModel() {
@@ -229,6 +313,7 @@ class PlaylistBatchFragment : Fragment() {
                 count,
                 count
             )
+            binding.startDownloadButton.isEnabled = count > 0
         }
 
         viewModel.isLoading.observe(viewLifecycleOwner) { loading ->

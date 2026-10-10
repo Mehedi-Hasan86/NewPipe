@@ -62,7 +62,10 @@ class PlaylistBatchOptionsSheet : DialogFragment() {
         var usePlaylistSubfolder: Boolean = true,
         var filenameTemplate: String = PlaylistDownloadOptions.DEFAULT_FILENAME_TEMPLATE,
         var duplicateAction: DuplicateAction = DuplicateAction.OVERWRITE,
-        var appendLanguageSuffix: Boolean = true
+        var appendLanguageSuffix: Boolean = true,
+        var parallelVideos: Int = PlaylistDownloadOptions.DEFAULT_PARALLEL_VIDEOS,
+        var wifiOnly: Boolean = false,
+        var maxRetries: Int = PlaylistDownloadOptions.DEFAULT_MAX_RETRIES
     ) {
         fun toImmutable(): PlaylistDownloadOptions {
             return PlaylistDownloadOptions(
@@ -81,7 +84,10 @@ class PlaylistBatchOptionsSheet : DialogFragment() {
                 usePlaylistSubfolder = usePlaylistSubfolder,
                 filenameTemplate = filenameTemplate,
                 duplicateAction = duplicateAction,
-                appendLanguageSuffix = appendLanguageSuffix
+                appendLanguageSuffix = appendLanguageSuffix,
+                parallelVideos = parallelVideos,
+                wifiOnly = wifiOnly,
+                maxRetries = maxRetries
             )
         }
     }
@@ -117,7 +123,10 @@ class PlaylistBatchOptionsSheet : DialogFragment() {
             usePlaylistSubfolder = current.usePlaylistSubfolder,
             filenameTemplate = current.filenameTemplate,
             duplicateAction = current.duplicateAction,
-            appendLanguageSuffix = current.appendLanguageSuffix
+            appendLanguageSuffix = current.appendLanguageSuffix,
+            parallelVideos = current.parallelVideos,
+            wifiOnly = current.wifiOnly,
+            maxRetries = current.maxRetries
         )
 
         setupMode()
@@ -312,6 +321,33 @@ class PlaylistBatchOptionsSheet : DialogFragment() {
         binding.languageSuffixCheckBox.setOnCheckedChangeListener { _, checked ->
             working.appendLanguageSuffix = checked
             refreshPreview()
+        }
+
+        val parallelLabels = (1..PlaylistDownloadOptions.MAX_PARALLEL_VIDEOS).map {
+            resources.getQuantityString(R.plurals.playlist_batch_parallel_videos, it, it)
+        }
+        setSpinnerItems(
+            binding.parallelSpinner,
+            parallelLabels,
+            (working.parallelVideos - 1).coerceIn(0, PlaylistDownloadOptions.MAX_PARALLEL_VIDEOS - 1)
+        ) { position ->
+            working.parallelVideos = position + 1
+        }
+
+        binding.wifiOnlyCheckBox.isChecked = working.wifiOnly
+        binding.wifiOnlyCheckBox.setOnCheckedChangeListener { _, checked ->
+            working.wifiOnly = checked
+        }
+
+        val retryLabels = (0..PlaylistDownloadOptions.MAX_RETRIES).map {
+            resources.getQuantityString(R.plurals.playlist_batch_retries, it, it)
+        }
+        setSpinnerItems(
+            binding.retriesSpinner,
+            retryLabels,
+            working.maxRetries.coerceIn(0, PlaylistDownloadOptions.MAX_RETRIES)
+        ) { position ->
+            working.maxRetries = position
         }
     }
 

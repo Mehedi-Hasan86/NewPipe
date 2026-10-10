@@ -6,6 +6,7 @@
 package org.schabi.newpipe.download.playlist
 
 import java.io.Serializable
+import kotlinx.serialization.Serializable as KSerializable
 
 /**
  * STEP 2: download options for playlist batch download (UI + model + persistence only).
@@ -13,12 +14,14 @@ import java.io.Serializable
  *
  * All classes here implement [Serializable] so STEP 3 can store them with each queued item.
  */
+@KSerializable
 enum class PlaylistBatchMode : Serializable {
     VIDEO,
     AUDIO_ONLY
 }
 
 /** Video container, mirroring the muxer decision in DownloadDialog (MPEG_4 / WEBM). */
+@KSerializable
 enum class PlaylistVideoContainer : Serializable {
     MP4,
     WEBM;
@@ -27,6 +30,7 @@ enum class PlaylistVideoContainer : Serializable {
 }
 
 /** Audio container, mirroring DownloadDialog (M4A passthrough / WEBMA_OPUS demuxed to .opus). */
+@KSerializable
 enum class PlaylistAudioContainer : Serializable {
     M4A,
     OPUS;
@@ -35,6 +39,7 @@ enum class PlaylistAudioContainer : Serializable {
 }
 
 /** What to do when the preferred audio language is missing for an item. */
+@KSerializable
 enum class MissingLanguageAction : Serializable {
     USE_ORIGINAL,
     SKIP_ITEM,
@@ -42,6 +47,7 @@ enum class MissingLanguageAction : Serializable {
 }
 
 /** What to do when the target file already exists (consistent with DownloadDialog). */
+@KSerializable
 enum class DuplicateAction : Serializable {
     /** Forget/re-create, like DownloadDialog does for finished/pending missions. */
     OVERWRITE,
@@ -59,6 +65,7 @@ enum class DuplicateAction : Serializable {
  * Qualities/formats are stored as targets (resolution string, container), never as
  * stream indexes, so they can be re-resolved per item when stream URLs expire.
  */
+@KSerializable
 data class PlaylistDownloadOptions(
     val mode: PlaylistBatchMode = PlaylistBatchMode.VIDEO,
     val targetResolution: String = DEFAULT_TARGET_RESOLUTION,
@@ -80,12 +87,22 @@ data class PlaylistDownloadOptions(
     val usePlaylistSubfolder: Boolean = true,
     val filenameTemplate: String = DEFAULT_FILENAME_TEMPLATE,
     val duplicateAction: DuplicateAction = DuplicateAction.OVERWRITE,
-    val appendLanguageSuffix: Boolean = true
+    val appendLanguageSuffix: Boolean = true,
+    /** Max simultaneously active items (each mission already uses multiple threads). */
+    val parallelVideos: Int = DEFAULT_PARALLEL_VIDEOS,
+    /** When true, new items only start on unmetered (Wi-Fi) networks. */
+    val wifiOnly: Boolean = false,
+    /** Per-item auto-retries after a failure, with backoff. */
+    val maxRetries: Int = DEFAULT_MAX_RETRIES
 ) : Serializable {
     companion object {
         const val AUDIO_LANGUAGE_ORIGINAL = "original"
         const val DEFAULT_TARGET_RESOLUTION = "720p"
         const val DEFAULT_FILENAME_TEMPLATE = "{index} - {title}"
+        const val DEFAULT_PARALLEL_VIDEOS = 1
+        const val MAX_PARALLEL_VIDEOS = 3
+        const val DEFAULT_MAX_RETRIES = 2
+        const val MAX_RETRIES = 5
     }
 }
 
@@ -96,6 +113,7 @@ data class PlaylistDownloadOptions(
  * so it can be re-resolved via [org.schabi.newpipe.util.ListHelper.getAudioFormatIndex]
  * when stream URLs expire.
  */
+@KSerializable
 data class PerItemOverride(
     val targetResolution: String? = null,
     val videoContainer: PlaylistVideoContainer? = null,

@@ -268,6 +268,41 @@ public class StoredDirectoryHelper {
         return tag;
     }
 
+    /**
+     * Returns a helper for a named child folder of this directory, creating it if needed.
+     *
+     * <p>Used by playlist batch download for the optional playlist-named subfolder.
+     * For SAF storages the child is addressed through a tree URI built with
+     * {@link DocumentsContract#buildTreeDocumentUri(String, String)}, which stays
+     * inside the already-granted tree.</p>
+     *
+     * @param ctx the Android context, used for SAF document access
+     * @param name the already-sanitized subfolder name
+     * @param subTag the tag for the returned helper
+     * @return a helper rooted at the child folder
+     * @throws IOException if the folder cannot be created or wrapped
+     */
+    public StoredDirectoryHelper getSubfolder(@NonNull final Context ctx,
+                                              @NonNull final String name,
+                                              final String subTag) throws IOException {
+        if (docTree == null) {
+            final Path sub = ioTree.resolve(name);
+            Files.createDirectories(sub);
+            return new StoredDirectoryHelper(ctx, Uri.fromFile(sub.toFile()), subTag);
+        }
+
+        DocumentFile sub = findFileSAFHelper(ctx, docTree, name);
+        if (sub == null || !sub.isDirectory()) {
+            sub = docTree.createDirectory(name);
+        }
+        if (sub == null || !sub.isDirectory()) {
+            throw new IOException("Cannot create subfolder " + name + " in " + docTree.getUri());
+        }
+        final Uri treeUri = DocumentsContract.buildTreeDocumentUri(
+                sub.getUri().getAuthority(), DocumentsContract.getDocumentId(sub.getUri()));
+        return new StoredDirectoryHelper(ctx, treeUri, subTag);
+    }
+
     public Uri findFile(final String filename) {
         if (docTree == null) {
             final Path res = ioTree.resolve(filename);

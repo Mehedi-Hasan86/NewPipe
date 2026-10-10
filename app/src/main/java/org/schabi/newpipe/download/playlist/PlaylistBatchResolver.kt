@@ -9,11 +9,17 @@ import android.content.Context
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import org.schabi.newpipe.extractor.MediaFormat
+import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfo
+import org.schabi.newpipe.extractor.stream.SubtitlesStream
+import org.schabi.newpipe.extractor.stream.VideoStream
 import org.schabi.newpipe.util.FilenameUtils
 import org.schabi.newpipe.util.ListHelper
 import org.schabi.newpipe.util.Localization
+import org.schabi.newpipe.util.SecondaryStreamHelper
+import us.shandian.giga.postprocessing.Postprocessing
 
 /**
  * Small shared helpers for playlist batch download, reusing the existing
@@ -171,5 +177,239 @@ object PlaylistBatchResolver {
         } catch (e: Exception) {
             code
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Stream picking (used by the STEP 3 executor; mirrors DownloadDialog)
+    // ------------------------------------------------------------------
+
+    /** Picked video stream plus its mux pairing, if the video is video-only. */
+    data class ResolvedVideo(
+        val main: VideoStream,
+        val secondaryAudio: AudioStream?,
+        val postprocessingName: String?,
+        val postprocessingArgs: Array<String>?
+    )
+
+    /** Audio picking outcome. */
+    sealed class AudioResolution {
+        data class Chosen(val stream: AudioStream) : AudioResolution()
+        data object NoAudio : AudioResolution()
+        data class MissingLanguage(val available: List<AudioTrackChoice>) : AudioResolution()
+    }
+
+    /**
+     * Picks the video stream for [targetResolution] (e.g. "720p") in [container].
+     * Prefers progressive streams (no muxing); falls back to video-only + muxed audio
+     * via [SecondaryStreamHelper] like DownloadDialog. With [fallbackToBest] picks the
+     * best stream at or below the target, else the best available; without it returns
+     * null when nothing matches exactly.
+     */
+    fun resolveVideo(
+        context: Context,
+        info: StreamInfo,
+        targetResolution: String,
+        container: PlaylistVideoContainer,
+        fallbackToBest: Boolean
+    ): ResolvedVideo? {
+        val format = if (container == PlaylistVideoContainer.MP4) {
+            MediaFormat.MPEG_4
+        } else {
+            MediaFormat.WEBM
+        }
+        val candidates = ListHelper.getStreamsOfSpecifiedDelivery(
+            info.videoStreams,
+            DeliveryMethod.PROGRESSIVE_HTTP
+        ).filter { it.format == format } +
+            ListHelper.getStreamsOfSpecifiedDelivery(
+                info.videoOnlyStreams,
+                DeliveryMethod.PROGRESSIVE_HTTP
+            ).filter { it.format == format }
+        if (candidates.isEmpty()) {
+            return null
+        }
+
+        val exact = candidates.filter { it.getResolution() == targetResolution }
+        val main = exact.firstOrNull { !it.isVideoOnly }
+            ?: exact.firstOrNull()
+            ?: if (!fallbackToBest) {
+                return null
+            } else {
+                pickBestBelow(candidates, targetResolution)
+                    ?: candidates.maxByOrNull { resolutionHeight(it.getResolution()) }
+            }
+            ?: return null
+
+        return if (main.isVideoOnly) {
+            val audioStreams = ListHelper.getStreamsOfSpecifiedDelivery(
+                info.audioStreams,
+                DeliveryMethod.PROGRESSIVE_HTTP
+            )
+            val secondary = SecondaryStreamHelper.getAudioStreamFor(
+                context,
+                audioStreams,
+                main
+            ) ?: return null
+            val psName = if (format == MediaFormat.MPEG_4) {
+                Postprocessing.ALGORITHM_MP4_FROM_DASH_MUXER
+            } else {
+                Postprocessing.ALGORITHM_WEBM_MUXER
+            }
+            ResolvedVideo(main, secondary, psName, null)
+        } else {
+            ResolvedVideo(main, null, null, null)
+        }
+    }
+
+    /**
+     * Picks the audio stream: override track id first, then the preferred language,
+     * then the default group from [ListHelper]. Returns [AudioResolution.MissingLanguage]
+     * when a non-original language was requested but is unavailable, so the caller
+     * can apply the configured fallback rule.
+     */
+    fun resolveAudio(
+        context: Context,
+        info: StreamInfo,
+        container: PlaylistAudioContainer,
+        preferHighestBitrate: Boolean,
+        preferredLanguage: String,
+        overrideTrackId: String?
+    ): AudioResolution {
+        val streams = ListHelper.getStreamsOfSpecifiedDelivery(
+            info.audioStreams,
+            DeliveryMethod.PROGRESSIVE_HTTP
+        )
+        val grouped = ListHelper.getGroupedAudioStreams(context, streams)
+        if (grouped.isEmpty()) {
+            return AudioResolution.NoAudio
+        }
+        if (grouped.size == 1 && grouped[0].firstOrNull()?.audioTrackId == null) {
+            return pickFromGroup(grouped[0], container, preferHighestBitrate)
+                ?.let { AudioResolution.Chosen(it) }
+                ?: AudioResolution.NoAudio
+        }
+
+        overrideTrackId?.let { wanted ->
+            grouped.firstOrNull { group ->
+                group.any { it.audioTrackId == wanted }
+            }?.let { group ->
+                pickFromGroup(group, container, preferHighestBitrate)
+                    ?.let { return AudioResolution.Chosen(it) }
+            }
+        }
+
+        val wantOriginal = preferredLanguage.equals(
+            PlaylistDownloadOptions.AUDIO_LANGUAGE_ORIGINAL,
+            ignoreCase = true
+        )
+        if (wantOriginal) {
+            val index = ListHelper.getDefaultAudioTrackGroup(context, grouped)
+            if (index >= 0) {
+                pickFromGroup(grouped[index], container, preferHighestBitrate)
+                    ?.let { return AudioResolution.Chosen(it) }
+            }
+            return AudioResolution.NoAudio
+        }
+
+        grouped.firstOrNull { group ->
+            group.firstOrNull()?.audioLocale?.language
+                .equals(preferredLanguage, ignoreCase = true)
+        }?.let { group ->
+            pickFromGroup(group, container, preferHighestBitrate)
+                ?.let { return AudioResolution.Chosen(it) }
+        }
+        return AudioResolution.MissingLanguage(audioTrackChoices(context, info))
+    }
+
+    /** Postprocessing algorithm for a picked audio stream, mirroring DownloadDialog. */
+    fun audioPostprocessing(stream: AudioStream): String? {
+        return when (stream.format) {
+            MediaFormat.M4A -> Postprocessing.ALGORITHM_M4A_NO_DASH
+            MediaFormat.WEBMA_OPUS -> Postprocessing.ALGORITHM_OGG_FROM_WEBM_DEMUXER
+            else -> null
+        }
+    }
+
+    /**
+     * Best matching subtitle (manual preferred, auto-generated only when allowed).
+     * Returns null when nothing matches; callers skip subtitles silently then.
+     */
+    fun resolveSubtitle(
+        info: StreamInfo,
+        languages: List<String>,
+        preferManual: Boolean,
+        includeAuto: Boolean
+    ): SubtitlesStream? {
+        if (languages.isEmpty()) {
+            return null
+        }
+        val streams = ListHelper.getStreamsOfSpecifiedDelivery(
+            info.subtitles,
+            DeliveryMethod.PROGRESSIVE_HTTP
+        ).filter { stream ->
+            val tag = stream.languageTag ?: return@filter false
+            languages.any { code ->
+                tag.equals(code, ignoreCase = true) ||
+                    tag.startsWith("$code-", ignoreCase = true)
+            } && (includeAuto || !stream.isAutoGenerated)
+        }
+        if (streams.isEmpty()) {
+            return null
+        }
+        if (preferManual) {
+            streams.firstOrNull { !it.isAutoGenerated }?.let { return it }
+        }
+        return streams[0]
+    }
+
+    /** Postprocessing for a subtitle: TTML is converted to SRT, like DownloadDialog. */
+    fun subtitlePostprocessing(stream: SubtitlesStream): Pair<String?, Array<String>?> {
+        return if (stream.format == MediaFormat.TTML) {
+            Pair(
+                Postprocessing.ALGORITHM_TTML_CONVERTER,
+                arrayOf(stream.format?.getSuffix() ?: "ttml", "false")
+            )
+        } else {
+            Pair(null, null)
+        }
+    }
+
+    private fun pickFromGroup(
+        group: List<AudioStream>,
+        container: PlaylistAudioContainer,
+        preferHighestBitrate: Boolean
+    ): AudioStream? {
+        if (group.isEmpty()) {
+            return null
+        }
+        val wanted = if (container == PlaylistAudioContainer.M4A) {
+            MediaFormat.M4A
+        } else {
+            MediaFormat.WEBMA_OPUS
+        }
+        val inContainer = group.filter { it.format == wanted }
+        val pool = inContainer.ifEmpty { group }
+        return if (preferHighestBitrate) {
+            pool.maxByOrNull { it.averageBitrate }
+        } else {
+            pool.minByOrNull { it.averageBitrate }
+        }
+    }
+
+    private fun pickBestBelow(
+        candidates: List<VideoStream>,
+        targetResolution: String
+    ): VideoStream? {
+        val target = resolutionHeight(targetResolution)
+        return candidates
+            .filter { resolutionHeight(it.getResolution()) <= target }
+            .maxByOrNull { resolutionHeight(it.getResolution()) }
+    }
+
+    private fun resolutionHeight(resolution: String?): Int {
+        if (resolution.isNullOrBlank()) {
+            return 0
+        }
+        return resolution.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
     }
 }

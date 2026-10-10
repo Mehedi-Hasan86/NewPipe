@@ -1,0 +1,251 @@
+/*
+ * SPDX-FileCopyrightText: 2026 NewPipe e.V. <https://newpipe-ev.de>
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+package org.schabi.newpipe.download.playlist
+
+import android.app.Activity
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.fragment.app.Fragment
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import org.schabi.newpipe.R
+import org.schabi.newpipe.databinding.FragmentPlaylistBatchQueueBinding
+
+/**
+ * Batch queue screen (STEP 3): overall + per-item progress polled from
+ * [BatchDownloadManager], retry/cancel per item and for the whole batch,
+ * All/Completed/Failed filters and pending reorder. The existing Downloads
+ * screen keeps working as before.
+ */
+class PlaylistBatchQueueFragment : Fragment() {
+
+    companion object {
+        @JvmStatic
+        fun newInstance(): PlaylistBatchQueueFragment {
+            return PlaylistBatchQueueFragment()
+        }
+    }
+
+    private var _binding: FragmentPlaylistBatchQueueBinding? = null
+    private val binding get() = _binding!!
+
+    private lateinit var manager: BatchDownloadManager
+    private lateinit var adapter: PlaylistBatchQueueAdapter
+    private var pendingFolderKey: String? = null
+
+    private val folderPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) {
+            return@registerForActivityResult
+        }
+        val uri = result.data?.data ?: return@registerForActivityResult
+        val key = pendingFolderKey ?: return@registerForActivityResult
+        pendingFolderKey = null
+        manager.onFolderPicked(key, uri)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        manager = BatchDownloadManager.getInstance(requireContext())
+    }
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        _binding = FragmentPlaylistBatchQueueBinding.inflate(inflater, container, false)
+        return binding.root
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        adapter = PlaylistBatchQueueAdapter(
+            onRetry = { url -> manager.retryItem(url) },
+            onCancel = { url -> manager.cancelItem(url) }
+        )
+        binding.queueList.layoutManager = LinearLayoutManager(requireContext())
+        binding.queueList.adapter = adapter
+        ItemTouchHelper(DragCallback()).attachToRecyclerView(binding.queueList)
+
+        binding.pauseResumeButton.setOnClickListener { togglePause() }
+        binding.cancelAllButton.setOnClickListener { confirmCancelAll() }
+        binding.pickFolderButton.setOnClickListener { pickFolder() }
+        binding.filterAllButton.setOnClickListener {
+            adapter.setFilter(PlaylistBatchQueueAdapter.Filter.ALL)
+        }
+        binding.filterCompletedButton.setOnClickListener {
+            adapter.setFilter(PlaylistBatchQueueAdapter.Filter.COMPLETED)
+        }
+        binding.filterFailedButton.setOnClickListener {
+            adapter.setFilter(PlaylistBatchQueueAdapter.Filter.FAILED)
+        }
+
+        // The queue reads persisted state from the manager (survives restarts).
+        manager.uiState.observe(viewLifecycleOwner) { state -> render(state) }
+        manager.messageEvent.observe(viewLifecycleOwner) { event ->
+            event.consume()?.let { text ->
+                Toast.makeText(requireContext(), text, Toast.LENGTH_LONG).show()
+            }
+        }
+        manager.folderEvent.observe(viewLifecycleOwner) { event ->
+            event.consume()?.let { prefKey ->
+                pendingFolderKey = prefKey
+                pickFolder()
+            }
+        }
+        manager.askLanguageEvent.observe(viewLifecycleOwner) { event ->
+            event.consume()?.let { urls -> showAskLanguageDialog(urls) }
+        }
+        manager.restoreIfNeeded()
+    }
+
+    override fun onDestroyView() {
+        _binding = null
+        super.onDestroyView()
+    }
+
+    // ------------------------------------------------------------------
+
+    private fun render(state: BatchUiState) {
+        if (_binding == null) {
+            return
+        }
+        binding.queuePlaylistNameView.text = state.playlistName
+        binding.queueCountsView.text = getString(
+            R.string.playlist_batch_queue_counts,
+            state.completedCount,
+            state.totalCount,
+            state.failedCount
+        )
+        binding.queueOverallProgress.progress =
+            (state.overallFraction * 100).toInt().coerceIn(0, 100)
+        binding.queueStatusView.text = batchStatusText(state)
+        binding.pauseResumeButton.text = getString(
+            if (state.batchStatus == BatchStatus.PAUSED ||
+                state.batchStatus == BatchStatus.WAITING_WIFI
+            ) {
+                R.string.playlist_batch_resume
+            } else {
+                R.string.playlist_batch_pause
+            }
+        )
+        val terminal = state.batchStatus == null ||
+            state.batchStatus == BatchStatus.COMPLETED ||
+            state.batchStatus == BatchStatus.CANCELLED
+        binding.pauseResumeButton.isEnabled = !terminal && state.totalCount > 0
+        binding.cancelAllButton.isEnabled = !terminal && state.totalCount > 0
+        binding.pickFolderButton.visibility =
+            if (state.needsFolder) View.VISIBLE else View.GONE
+        adapter.setItems(state.items)
+    }
+
+    private fun batchStatusText(state: BatchUiState): String {
+        return when (state.batchStatus) {
+            BatchStatus.RUNNING -> getString(R.string.playlist_batch_state_running)
+            BatchStatus.PAUSED -> getString(R.string.playlist_batch_state_paused)
+            BatchStatus.WAITING_WIFI -> getString(R.string.playlist_batch_waiting_wifi)
+            BatchStatus.COOLDOWN -> getString(R.string.playlist_batch_cooldown)
+            BatchStatus.COMPLETED -> getString(R.string.playlist_batch_state_batch_completed)
+            BatchStatus.CANCELLED -> getString(R.string.playlist_batch_state_batch_cancelled)
+            null -> getString(R.string.playlist_batch_state_no_batch)
+        }
+    }
+
+    private fun togglePause() {
+        val state = manager.uiState.value ?: return
+        if (state.batchStatus == BatchStatus.PAUSED ||
+            state.batchStatus == BatchStatus.WAITING_WIFI
+        ) {
+            manager.resumeBatch()
+        } else {
+            manager.pauseBatch()
+        }
+    }
+
+    private fun confirmCancelAll() {
+        AlertDialog.Builder(requireContext())
+            .setMessage(R.string.playlist_batch_confirm_cancel_all)
+            .setPositiveButton(R.string.playlist_batch_cancel_all) { _, _ ->
+                manager.cancelBatch()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun pickFolder() {
+        try {
+            folderPickerLauncher.launch(manager.folderPickerIntent())
+        } catch (e: Exception) {
+            Toast.makeText(
+                requireContext(),
+                R.string.playlist_batch_pick_folder_failed,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun showAskLanguageDialog(urls: List<String>) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.playlist_batch_ask_language_title)
+            .setMessage(
+                resources.getQuantityString(
+                    R.plurals.playlist_batch_ask_language_message,
+                    urls.size,
+                    urls.size
+                )
+            )
+            .setPositiveButton(R.string.playlist_batch_ask_language_retry) { _, _ ->
+                manager.retrySkippedWithOriginal(urls)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private inner class DragCallback : ItemTouchHelper.SimpleCallback(
+        ItemTouchHelper.UP or ItemTouchHelper.DOWN,
+        0
+    ) {
+        override fun onMove(
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder,
+            target: RecyclerView.ViewHolder
+        ): Boolean {
+            val fromUrl = adapter.urlAt(viewHolder.bindingAdapterPosition) ?: return false
+            val toUrl = adapter.urlAt(target.bindingAdapterPosition) ?: return false
+            val from = adapter.pendingIndex(fromUrl)
+            val to = adapter.pendingIndex(toUrl)
+            if (from < 0 || to < 0) {
+                return false
+            }
+            manager.movePending(from, to)
+            return true
+        }
+
+        override fun getMovementFlags(
+            recyclerView: RecyclerView,
+            viewHolder: RecyclerView.ViewHolder
+        ): Int {
+            return if (adapter.isPendingAt(viewHolder.bindingAdapterPosition)) {
+                super.getMovementFlags(recyclerView, viewHolder)
+            } else {
+                0
+            }
+        }
+
+        override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+            // no swipe actions
+        }
+    }
+}

@@ -549,6 +549,73 @@
         <item quantity="one">%d audio language</item>
         <item quantity="other">%d audio languages</item>
     </plurals>
+    <string name="playlist_batch_parallel">Parallel videos (1–3)</string>
+    <string name="playlist_batch_wifi_only">Download on Wi-Fi only</string>
+    <string name="playlist_batch_max_retries">Auto-retries per video</string>
+    <plurals name="playlist_batch_parallel_videos">
+        <item quantity="one">%d video at a time</item>
+        <item quantity="other">%d videos at a time</item>
+    </plurals>
+    <plurals name="playlist_batch_retries">
+        <item quantity="one">%d retry</item>
+        <item quantity="other">%d retries</item>
+    </plurals>
+    <!-- Playlist batch download executor (STEP 3) -->
+    <string name="playlist_batch_queue_title">Batch downloads</string>
+    <string name="playlist_batch_queue_counts">%1$d of %2$d completed • %3$d failed</string>
+    <string name="playlist_batch_queue_row_title">%1$d. %2$s</string>
+    <string name="playlist_batch_pause">Pause</string>
+    <string name="playlist_batch_resume">Resume</string>
+    <string name="playlist_batch_cancel">Cancel</string>
+    <string name="playlist_batch_cancel_all">Cancel all</string>
+    <string name="playlist_batch_retry">Retry</string>
+    <string name="playlist_batch_confirm_cancel_all">Cancel the whole batch? Completed downloads are kept.</string>
+    <string name="playlist_batch_confirm_title">Start batch download?</string>
+    <string name="playlist_batch_confirm_message">%1$d videos • %2$s • audio: %3$s • %4$s</string>
+    <string name="playlist_batch_confirm_subfolder_yes">playlist subfolder</string>
+    <string name="playlist_batch_confirm_subfolder_no">main download folder</string>
+    <string name="playlist_batch_confirm_replace">A batch is still active. Replace it with the new one?</string>
+    <string name="playlist_batch_replace">Replace</string>
+    <string name="playlist_batch_batch_busy">A batch is already running.</string>
+    <string name="playlist_batch_filter_all">All</string>
+    <string name="playlist_batch_filter_completed">Completed</string>
+    <string name="playlist_batch_filter_failed">Failed</string>
+    <string name="playlist_batch_pick_folder">Pick folder</string>
+    <string name="playlist_batch_pick_folder_failed">Could not open the folder picker.</string>
+    <string name="playlist_batch_state_pending">Waiting</string>
+    <string name="playlist_batch_state_resolving">Resolving…</string>
+    <string name="playlist_batch_state_downloading">Downloading</string>
+    <string name="playlist_batch_state_merging">Merging…</string>
+    <string name="playlist_batch_state_completed">Completed</string>
+    <string name="playlist_batch_state_failed">Failed</string>
+    <string name="playlist_batch_state_skipped">Skipped</string>
+    <string name="playlist_batch_state_cancelled">Cancelled</string>
+    <string name="playlist_batch_state_running">Downloading…</string>
+    <string name="playlist_batch_state_paused">Paused</string>
+    <string name="playlist_batch_state_batch_completed">Batch completed</string>
+    <string name="playlist_batch_state_batch_cancelled">Batch cancelled</string>
+    <string name="playlist_batch_state_no_batch">No batch yet</string>
+    <string name="playlist_batch_speed_bps">%1$.0f B/s</string>
+    <string name="playlist_batch_speed_kbps">%1$.1f KB/s</string>
+    <string name="playlist_batch_speed_mbps">%1$.1f MB/s</string>
+    <string name="playlist_batch_eta">%1$s left</string>
+    <string name="playlist_batch_waiting_wifi">Waiting for Wi-Fi…</string>
+    <string name="playlist_batch_cooldown">Rate limited. Cooling down before retrying…</string>
+    <string name="playlist_batch_low_space">Warning: download folder is almost full.</string>
+    <string name="playlist_batch_service_bind_failed">Could not connect to the download service.</string>
+    <string name="playlist_batch_fail_unknown">Download failed.</string>
+    <string name="playlist_batch_fail_no_video">No matching video stream found.</string>
+    <string name="playlist_batch_fail_no_audio">No matching audio stream found.</string>
+    <string name="playlist_batch_fail_language">Language not available</string>
+    <string name="playlist_batch_fail_storage">Could not create the target file.</string>
+    <string name="playlist_batch_fail_mission">Download error %1$d.</string>
+    <string name="playlist_batch_skipped_exists">File already exists</string>
+    <string name="playlist_batch_ask_language_title">Audio language missing</string>
+    <string name="playlist_batch_ask_language_retry">Download with Original</string>
+    <plurals name="playlist_batch_ask_language_message">
+        <item quantity="one">%d video had no track in the preferred language.</item>
+        <item quantity="other">%d videos had no track in the preferred language.</item>
+    </plurals>
     <!-- Players -->
     <string name="caption_none">No Captions</string>
     <string name="resize_fit">Fit</string>

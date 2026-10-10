@@ -36,6 +36,7 @@ import org.schabi.newpipe.database.feed.model.FeedGroupEntity;
 import org.schabi.newpipe.download.DownloadActivity;
 import org.schabi.newpipe.download.playlist.PlaylistBatchActivity;
 import org.schabi.newpipe.download.playlist.PlaylistBatchFragment;
+import org.schabi.newpipe.download.playlist.PlaylistBatchQueueFragment;
 import org.schabi.newpipe.error.ErrorUtil;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.StreamingService;
@@ -593,6 +594,20 @@ public final class NavigationHelper {
                                                 final int serviceId, final String url,
                                                 @Nullable final String name) {
         context.startActivity(PlaylistBatchActivity.newIntent(context, serviceId, url, name));
+    }
+
+    /**
+     * Opens the playlist batch queue screen, which shows the persisted batch
+     * and its per-item progress.
+     *
+     * @param fragmentManager the fragment manager in which to open the queue screen
+     */
+    public static void openPlaylistBatchQueue(final FragmentManager fragmentManager) {
+        defaultTransaction(fragmentManager)
+                .replace(R.id.fragment_holder,
+                        PlaylistBatchQueueFragment.newInstance())
+                .addToBackStack(null)
+                .commit();
     }
 
     public static void openFeedFragment(final FragmentManager fragmentManager) {
