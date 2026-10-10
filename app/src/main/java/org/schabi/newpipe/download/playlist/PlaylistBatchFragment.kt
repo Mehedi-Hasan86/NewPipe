@@ -251,7 +251,7 @@ class PlaylistBatchFragment : Fragment() {
             ).show()
             return
         }
-        NavigationHelper.openPlaylistBatchQueue(parentFragmentManager)
+        NavigationHelper.openPlaylistBatchQueue(requireContext())
     }
 
     // ------------------------------------------------------------------

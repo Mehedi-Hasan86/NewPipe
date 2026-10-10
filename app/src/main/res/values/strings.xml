@@ -616,6 +616,12 @@
         <item quantity="one">%d video had no track in the preferred language.</item>
         <item quantity="other">%d videos had no track in the preferred language.</item>
     </plurals>
+    <string name="playlist_batch_queue_empty">No batch items</string>
+    <string name="playlist_batch_needs_folder">No download folder selected</string>
+    <string name="playlist_batch_detail_resolving">Resolving %d</string>
+    <string name="playlist_batch_detail_downloading">Downloading %d</string>
+    <string name="playlist_batch_detail_merging">Merging %d</string>
+    <string name="playlist_batch_detail_pending">Pending %d</string>
     <!-- Players -->
     <string name="caption_none">No Captions</string>
     <string name="resize_fit">Fit</string>

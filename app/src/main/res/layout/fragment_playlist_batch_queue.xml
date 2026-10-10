@@ -47,6 +47,15 @@
             android:textAppearance="?android:attr/textAppearanceSmall"
             tools:text="Downloading…" />
 
+        <TextView
+            android:id="@+id/queueDetailStatusView"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textAppearance="?android:attr/textAppearanceSmall"
+            tools:text="Resolving 1/5 • Waiting for Wi-Fi"
+            tools:visibility="visible" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -126,5 +135,34 @@
         android:layout_weight="1"
         android:clipToPadding="false"
         android:scrollbars="vertical" />
+
+    <!-- Empty state -->
+    <LinearLayout
+        android:id="@+id/queueEmptyView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:visibility="gone"
+        tools:visibility="visible">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="(ಠ_ಠ)"
+            android:textSize="35sp" />
+
+        <TextView
+            android:id="@+id/queueEmptyMessageView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/playlist_batch_queue_empty"
+            android:textSize="16sp" />
+
+    </LinearLayout>
 
 </LinearLayout>

@@ -132,6 +132,7 @@ class PlaylistBatchQueueFragment : Fragment() {
         binding.queueOverallProgress.progress =
             (state.overallFraction * 100).toInt().coerceIn(0, 100)
         binding.queueStatusView.text = batchStatusText(state)
+        binding.queueDetailStatusView.text = detailStatusText(state)
         binding.pauseResumeButton.text = getString(
             if (state.batchStatus == BatchStatus.PAUSED ||
                 state.batchStatus == BatchStatus.WAITING_WIFI
@@ -148,6 +149,11 @@ class PlaylistBatchQueueFragment : Fragment() {
         binding.cancelAllButton.isEnabled = !terminal && state.totalCount > 0
         binding.pickFolderButton.visibility =
             if (state.needsFolder) View.VISIBLE else View.GONE
+
+        val hasItems = state.items.isNotEmpty()
+        binding.queueList.visibility = if (hasItems) View.VISIBLE else View.GONE
+        binding.queueEmptyView.visibility = if (hasItems) View.GONE else View.VISIBLE
+
         adapter.setItems(state.items)
     }
 
@@ -161,6 +167,26 @@ class PlaylistBatchQueueFragment : Fragment() {
             BatchStatus.CANCELLED -> getString(R.string.playlist_batch_state_batch_cancelled)
             null -> getString(R.string.playlist_batch_state_no_batch)
         }
+    }
+
+    private fun detailStatusText(state: BatchUiState): String {
+        val parts = mutableListOf<String>()
+        val pending = state.items.count { it.status == BatchItemStatus.PENDING }
+        val resolving = state.items.count { it.status == BatchItemStatus.RESOLVING }
+        val downloading = state.items.count { it.status == BatchItemStatus.DOWNLOADING }
+        val merging = state.items.count { it.status == BatchItemStatus.MERGING }
+        val completed = state.completedCount
+        val failed = state.failedCount
+
+        if (resolving > 0) parts.add(getString(R.string.playlist_batch_detail_resolving, resolving))
+        if (downloading > 0) parts.add(getString(R.string.playlist_batch_detail_downloading, downloading))
+        if (merging > 0) parts.add(getString(R.string.playlist_batch_detail_merging, merging))
+        if (pending > 0) parts.add(getString(R.string.playlist_batch_detail_pending, pending))
+
+        if (state.waitingWifi) parts.add(getString(R.string.playlist_batch_waiting_wifi))
+        if (state.needsFolder) parts.add(getString(R.string.playlist_batch_needs_folder))
+
+        return parts.joinToString(" • ")
     }
 
     private fun togglePause() {

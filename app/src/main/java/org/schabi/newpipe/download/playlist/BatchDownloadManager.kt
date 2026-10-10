@@ -191,9 +191,18 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     // ------------------------------------------------------------------
 
     /** True when a non-terminal batch is persisted (caller asks to replace it). */
+    private companion object {
+        private const val TAG = "PlaylistBatch"
+    }
+
     fun hasUnfinishedBatch(): Boolean {
         val current = record ?: BatchStore.load(appContext)
-        return current != null && !isTerminal(current.status)
+        if (current == null || isTerminal(current.status)) {
+            return false
+        }
+        // Only consider the batch "unfinished" if there's at least one
+        // non-terminal item (PENDING/RESOLVING/DOWNLOADING/MERGING/PAUSED).
+        return current.items.any { !isTerminalItem(it.status) }
     }
 
     /**
@@ -210,8 +219,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         replace: Boolean = false
     ): Boolean {
         if (hasUnfinishedBatch() && !replace) {
+            Log.d(TAG, "startBatch: batch already active, replace=$replace, returning false")
             return false
         }
+        Log.d(TAG, "startBatch: playlistName=$playlistName, items=${items.size}, replace=$replace")
         val now = System.currentTimeMillis()
         record = BatchRecord(
             id = UUID.randomUUID().toString(),
@@ -233,6 +244,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 )
             }
         )
+        Log.d(TAG, "startBatch: created BatchRecord id=${record.id} with ${record.items.size} items")
         liveMissions.clear()
         speedSamples.clear()
         cooldownUntil = 0L
@@ -269,6 +281,28 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         val items = current.items.map { item ->
             if (isActiveStatus(item.status)) {
                 item.copy(status = BatchItemStatus.CANCELLED)
+            } else {
+                item
+            }
+        }
+        record = current.copy(status = BatchStatus.CANCELLED, items = items)
+        persist()
+        stopWifiCallback()
+        publish()
+    }
+
+    /**
+     * Clears a stuck batch: deletes all active missions, marks all non-completed
+     * items as FAILED (so user can retry), and clears the batch record.
+     * Use this when the batch is permanently stuck.
+     */
+    fun clearStuckBatch() {
+        val current = record ?: return
+        Log.w(TAG, "clearStuckBatch: clearing stuck batch id=${current.id}")
+        deleteActiveMissions()
+        val items = current.items.map { item ->
+            if (!isTerminalItem(item.status)) {
+                item.copy(status = BatchItemStatus.FAILED, failureReason = "Batch cleared by user")
             } else {
                 item
             }
@@ -410,10 +444,12 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     /** Loads persisted state for the queue screen (no-op when already loaded). */
     fun restoreIfNeeded() {
         if (record != null) {
+            Log.d(TAG, "restoreIfNeeded: record already in memory, publishing")
             publish()
             return
         }
         record = BatchStore.load(appContext)
+        Log.d(TAG, "restoreIfNeeded: loaded from store: ${if (record != null) "id=${record.id}, items=${record.items.size}, status=${record.status}" else "null"}")
         publish()
         if (record != null && !isTerminal(record!!.status)) {
             ensureBound { pump() }
@@ -475,11 +511,14 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private fun pump() {
         val current = record ?: return
+        Log.d(TAG, "pump: status=${current.status}, activeCount=${activeCount()}, pendingCount=${current.items.count { it.status == BatchItemStatus.PENDING }}, parallel=${current.options.parallelVideos}")
         if (!bound || manager() == null) {
+            Log.d(TAG, "pump: not bound or no manager, rebinding")
             ensureBound { pump() }
             return
         }
         if (current.status == BatchStatus.PAUSED || isTerminal(current.status)) {
+            Log.d(TAG, "pump: batch paused or terminal, publishing")
             publish()
             return
         }
@@ -1134,9 +1173,11 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     private fun reconcileAfterRestart() {
         val current = record ?: return
         if (isTerminal(current.status)) {
+            Log.d(TAG, "reconcileAfterRestart: batch already terminal, skipping")
             publish()
             return
         }
+        Log.d(TAG, "reconcileAfterRestart: reconciling batch id=${current.id}, status=${current.status}, items=${current.items.size}")
         val manager = manager() ?: return
         val iterator = manager.iterator
         val liveByStorage = mutableMapOf<String, DownloadMission>()
@@ -1154,31 +1195,33 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             }
             val mission = item.storageUri?.let { liveByStorage[it] }
             if (mission == null) {
-                item.copy(status = BatchItemStatus.PENDING)
+                Log.d(TAG, "reconcileAfterRestart: item ${item.url} has no live mission, marking PENDING for retry")
+                item.copy(status = BatchItemStatus.PENDING, failureReason = null)
             } else {
                 liveMissions[item.storageUri!!] = mission
                 when {
-                    mission.isFinished -> item.copy(
-                        status = BatchItemStatus.COMPLETED,
-                        lastProgress = 1.0
-                    )
-
-                    mission.running || mission.enqueued -> item.copy(
-                        status = BatchItemStatus.DOWNLOADING
-                    )
-
-                    else -> item.copy(status = BatchItemStatus.PENDING)
+                    mission.isFinished -> {
+                        Log.d(TAG, "reconcileAfterRestart: mission finished for ${item.url}")
+                        item.copy(status = BatchItemStatus.COMPLETED, lastProgress = 1.0)
+                    }
+                    mission.running || mission.enqueued -> {
+                        Log.d(TAG, "reconcileAfterRestart: mission running/enqueued for ${item.url}")
+                        item.copy(status = BatchItemStatus.DOWNLOADING)
+                    }
+                    else -> {
+                        Log.d(TAG, "reconcileAfterRestart: mission not running for ${item.url}, marking PENDING")
+                        item.copy(status = BatchItemStatus.PENDING, failureReason = null)
+                    }
                 }
             }
         }
         val paused = current.status == BatchStatus.PAUSED
-        record = current.copy(
-            status = when {
-                paused -> BatchStatus.PAUSED
-                else -> BatchStatus.RUNNING
-            },
-            items = items
-        )
+        val newStatus = when {
+            paused -> BatchStatus.PAUSED
+            else -> BatchStatus.RUNNING
+        }
+        Log.d(TAG, "reconcileAfterRestart: new status=$newStatus")
+        record = current.copy(status = newStatus, items = items)
         persist()
     }
 
