@@ -104,6 +104,29 @@ public class StoredFileHelper implements Serializable {
         this.srcType = this.docFile.getType();
     }
 
+    /**
+     * Creates a file under {@code tree} but records {@code parentTreeUri} as the parent tree
+     * (used for playlist-subfolder files, where the recorded parent must stay the user-granted
+     * root tree URI instead of a derived subfolder URI).
+     *
+     * @param context the Android context, used for SAF document access
+     * @param tree the directory the file is created in
+     * @param parentTreeUri the tree URI recorded as parent, or null to record {@code tree}
+     * @param filename the name of the file to create
+     * @param mime the mime type of the file
+     * @param safe true when the filename is known to be unused
+     * @throws IOException if the file cannot be created
+     */
+    StoredFileHelper(@Nullable final Context context, final DocumentFile tree,
+                     @Nullable final Uri parentTreeUri,
+                     final String filename, final String mime, final boolean safe)
+            throws IOException {
+        this(context, tree, filename, mime, safe);
+        if (parentTreeUri != null) {
+            this.sourceTree = parentTreeUri.toString();
+        }
+    }
+
     StoredFileHelper(final Path location, final String filename, final String mime)
             throws IOException {
         ioPath = location.resolve(filename);

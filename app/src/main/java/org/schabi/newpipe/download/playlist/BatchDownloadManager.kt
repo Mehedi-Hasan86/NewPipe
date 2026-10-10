@@ -411,6 +411,16 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * (same keys the service reads) and resumes the batch.
      */
     fun onFolderPicked(prefKey: String, folderUri: android.net.Uri) {
+        Log.d(TAG, "onFolderPicked: key=$prefKey uri=$folderUri")
+        try {
+            appContext.contentResolver.takePersistableUriPermission(
+                folderUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            Log.d(TAG, "onFolderPicked: persistable permission recorded for $folderUri")
+        } catch (e: Exception) {
+            Log.e(TAG, "onFolderPicked: takePersistableUriPermission failed for $folderUri", e)
+        }
         PreferenceManager.getDefaultSharedPreferences(appContext).edit()
             .putString(prefKey, folderUri.toString())
             .apply()
@@ -854,6 +864,11 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
         val threads = PreferenceManager.getDefaultSharedPreferences(appContext)
             .getInt(appContext.getString(R.string.default_download_threads), 3)
+        Log.d(
+            TAG,
+            "launchMission: kind=$kind file=${storage.uri} parent=${storage.parentUri} " +
+                "tag=${storage.tag} urls=${urls.size} ps=$psName item=${item.url}"
+        )
         DownloadManagerService.startMission(
             appContext, urls, storage, kind, threads, info, psName, psArgs, 0L, recovery
         )
@@ -893,17 +908,24 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
         val options = record?.options
         if (options?.usePlaylistSubfolder != true) {
+            Log.d(TAG, "targetDirectory: using root folder $path")
             return main
         }
+        // FilenameUtils applies the user's charset; additionally strip '!' and trailing
+        // dots/spaces, which SAF providers and Windows-style names reject
+        // (e.g. "Switching to Linux Challenge!").
         val subName = FilenameUtils.createFilename(
             appContext,
             record?.playlistName.orEmpty().ifBlank { item.title }
-        ).ifBlank { "playlist" }
-        return main.getSubfolder(
+        ).replace("!", "").trim().trimEnd('.', ' ').ifBlank { "playlist" }
+        Log.d(TAG, "targetDirectory: root=$path subfolder=$subName")
+        val sub = main.getSubfolder(
             appContext,
             subName,
             if (audioOnly) DownloadManager.TAG_AUDIO else DownloadManager.TAG_VIDEO
         )
+        Log.d(TAG, "targetDirectory: dirUri=${sub.uri} tag=${sub.tag}")
+        return sub
     }
 
     class FolderMissingException(val prefKey: String) : IOException()
@@ -1194,12 +1216,14 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             if (!isActiveStatus(item.status)) {
                 return@map item
             }
-            val mission = item.storageUri?.let { liveByStorage[it] }
+            val storageUri = item.storageUri
+            val mission = storageUri?.let { liveByStorage[it] }
             if (mission == null) {
                 Log.d(TAG, "reconcileAfterRestart: item ${item.url} has no live mission, marking PENDING for retry")
                 item.copy(status = BatchItemStatus.PENDING, failureReason = null)
             } else {
-                liveMissions[item.storageUri!!] = mission
+                // A mission is only found through a non-null storage URI.
+                liveMissions[requireNotNull(storageUri)] = mission
                 when {
                     mission.isFinished -> {
                         Log.d(TAG, "reconcileAfterRestart: mission finished for ${item.url}")
