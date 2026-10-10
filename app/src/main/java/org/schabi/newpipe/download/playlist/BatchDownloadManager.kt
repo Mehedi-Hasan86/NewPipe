@@ -167,6 +167,13 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     /** Stable subfolder name per playlist key (persisted with the queue). */
     private var folderNames: MutableMap<String, String> = mutableMapOf()
 
+    /**
+     * True once the persisted queue has been read into memory. Every mutating entry
+     * point calls [ensureLoaded] first, so memory can never overwrite the store
+     * before it has been read (which silently dropped batches).
+     */
+    private var storeLoaded = false
+
     /** Transient queue-screen selection requested from elsewhere (not persisted). */
     var pendingSelectBatchId: String? = null
     private var binder: DownloadManagerService.DownloadManagerBinder? = null
@@ -259,6 +266,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         options: PlaylistDownloadOptions,
         overrides: Map<String, PerItemOverride>
     ): StartBatchResult {
+        ensureLoaded()
         Log.d(TAG, "startBatch: playlistName=$playlistName, items=${items.size}")
         val key = PlaylistBatchUrlHelper.playlistKey(serviceId, playlistUrl)
         Log.d(TAG, "startBatch: playlistKey=$key")
@@ -407,6 +415,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     /** Pauses the ACTIVE batch only; queued batches are untouched. */
     fun pauseBatch() {
+        ensureLoaded()
         val current = record ?: return
         record = current.copy(status = BatchStatus.PAUSED)
         persist()
@@ -416,6 +425,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     /** Resumes the ACTIVE batch only; queued batches are untouched. */
     fun resumeBatch() {
+        ensureLoaded()
         val current = record ?: return
         if (isTerminal(current.status)) {
             return
@@ -434,6 +444,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * starts the next QUEUED batch, if any.
      */
     fun cancelBatch() {
+        ensureLoaded()
         val current = record ?: return
         deleteActiveMissions()
         val items = current.items.map { item ->
@@ -452,6 +463,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * next QUEUED batch, if any. Use this when the batch is permanently stuck.
      */
     fun clearStuckBatch() {
+        ensureLoaded()
         val current = record ?: return
         Log.w(TAG, "clearStuckBatch: clearing stuck batch id=${current.id}")
         deleteActiveMissions()
@@ -479,6 +491,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         items: List<PlaylistBatchItem>,
         overrides: Map<String, PerItemOverride>
     ): Int {
+        ensureLoaded()
         val active = record
         if (active != null && active.id == batchId) {
             val (merged, updated) = mergeInto(active, items, overrides)
@@ -550,6 +563,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @param url the item url to re-queue
      */
     fun retryItem(batchId: String, url: String) {
+        ensureLoaded()
         val current = record
         if (current == null || current.id != batchId) {
             Log.d(TAG, "retryItem: ignoring url=$url for non-active batch $batchId")
@@ -580,6 +594,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @param url the item url to cancel
      */
     fun cancelItem(batchId: String, url: String) {
+        ensureLoaded()
         val current = record
         if (current == null || current.id != batchId) {
             Log.d(TAG, "cancelItem: ignoring url=$url for non-active batch $batchId")
@@ -615,6 +630,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @param toQueueIndex index among PENDING items to move to
      */
     fun movePending(batchId: String, fromQueueIndex: Int, toQueueIndex: Int) {
+        ensureLoaded()
         val current = record
         if (current == null || current.id != batchId) {
             return
@@ -644,6 +660,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @param urls the skipped item urls to re-queue
      */
     fun retrySkippedWithOriginal(batchId: String, urls: List<String>) {
+        ensureLoaded()
         val current = record
         if (current == null || current.id != batchId) {
             Log.d(TAG, "retrySkippedWithOriginal: ignoring non-active batch $batchId")
@@ -681,6 +698,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * (same keys the service reads) and resumes the batch.
      */
     fun onFolderPicked(prefKey: String, folderUri: android.net.Uri) {
+        ensureLoaded()
         Log.d(TAG, "onFolderPicked: key=$prefKey uri=$folderUri")
         try {
             appContext.contentResolver.takePersistableUriPermission(
@@ -729,6 +747,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @param batchId the id of the batch to delete
      */
     fun deleteBatch(batchId: String) {
+        ensureLoaded()
         val active = record
         if (active != null && active.id == batchId) {
             Log.d(TAG, "delete active batch id=$batchId, stopping missions (keeping files)")
@@ -757,6 +776,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @return how many items were re-queued
      */
     fun retryFailed(batchId: String): Int {
+        ensureLoaded()
         val active = record
         if (active != null && active.id == batchId) {
             val failed = active.items.count { it.status == BatchItemStatus.FAILED }
@@ -815,8 +835,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @return how many batches were removed
      */
     fun clearFinished(): Int {
+        ensureLoaded()
         val done = otherBatches.filter { it.queueState == BatchQueueState.DONE }
         if (done.isEmpty()) {
+            Log.d(TAG, "clearFinished: no DONE batches to remove")
             return 0
         }
         Log.d(TAG, "clear finished batches count=${done.size}")
@@ -859,45 +881,14 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     /** Loads persisted state for the queue screen (no-op when already loaded). */
     fun restoreIfNeeded() {
-        if (record != null) {
-            Log.d(TAG, "restoreIfNeeded: record already in memory, publishing")
-            publish()
-            return
-        }
-        val stored = BatchStore.loadQueue(appContext)
-        folderNames = stored.folderNames.toMutableMap()
-        val loaded = stored.batches
-        Log.d(TAG, "restoreIfNeeded: loaded ${loaded.size} batches from store")
-        if (loaded.isEmpty()) {
-            publish()
-            return
-        }
-        // Seed stable folder names for every known batch (migrated ones included).
-        for (batch in loaded) {
-            folderNameFor(batch, batch.items.firstOrNull()?.title.orEmpty())
-        }
-        val actives = loaded.filter { it.queueState == BatchQueueState.ACTIVE }
-        val firstActive = actives.firstOrNull()
-        val demoted = actives.drop(1).map { it.copy(queueState = BatchQueueState.QUEUED) }
-        if (demoted.isNotEmpty()) {
-            Log.d(TAG, "restoreIfNeeded: demoted ${demoted.size} extra ACTIVE batches to QUEUED")
-        }
-        val queued = loaded.filter { it.queueState == BatchQueueState.QUEUED }
-        val done = loaded.filter { it.queueState == BatchQueueState.DONE }
-        otherBatches = demoted + queued + done
-        if (firstActive != null && !isTerminal(firstActive.status)) {
-            record = firstActive
-        } else {
-            if (firstActive != null) {
-                Log.d(
-                    TAG,
-                    "restoreIfNeeded: persisted ACTIVE batch ${firstActive.id} " +
-                        "is terminal, marking DONE"
-                )
-                otherBatches = otherBatches + firstActive.copy(queueState = BatchQueueState.DONE)
-            }
-            // No ACTIVE batch after a restart: start the oldest queued one.
+        ensureLoaded()
+        if (record == null &&
+            otherBatches.any { it.queueState == BatchQueueState.QUEUED }
+        ) {
+            // No ACTIVE batch (e.g. after a restart): start the oldest queued one.
             activateNextBatch()
+        } else {
+            publish()
         }
         val restored = record
         Log.d(
@@ -909,6 +900,62 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         persist()
         if (restored != null && !isTerminal(restored.status)) {
             ensureBound { pump() }
+        }
+    }
+
+    /**
+     * Loads the persisted queue into memory exactly once (idempotent). Every mutating
+     * entry point calls this first, so in-memory state can never overwrite the store
+     * before it has been read. Loading alone starts nothing: no activation, no
+     * reconcile, no pump, so a later [restoreIfNeeded] never duplicates side effects.
+     */
+    private fun ensureLoaded() {
+        if (storeLoaded) {
+            return
+        }
+        storeLoaded = true
+        val stored = BatchStore.loadQueue(appContext)
+        folderNames = stored.folderNames.toMutableMap()
+        val loaded = stored.batches
+        Log.d(TAG, "ensureLoaded: loaded ${loaded.size} batches from store")
+        if (loaded.isEmpty()) {
+            return
+        }
+        // Seed stable folder names for every known batch (migrated ones included).
+        for (batch in loaded) {
+            folderNameFor(batch, batch.items.firstOrNull()?.title.orEmpty())
+        }
+        adoptLoaded(loaded)
+    }
+
+    /**
+     * Splits loaded batches into the ACTIVE record and the rest, demoting extra
+     * ACTIVES to QUEUED and marking terminal ACTIVES as DONE.
+     *
+     * @param loaded the batches in stored order
+     */
+    private fun adoptLoaded(loaded: List<BatchRecord>) {
+        val actives = loaded.filter { it.queueState == BatchQueueState.ACTIVE }
+        val firstActive = actives.firstOrNull()
+        val demoted = actives.drop(1).map { it.copy(queueState = BatchQueueState.QUEUED) }
+        if (demoted.isNotEmpty()) {
+            Log.d(TAG, "adoptLoaded: demoted ${demoted.size} extra ACTIVE batches to QUEUED")
+        }
+        val queued = loaded.filter { it.queueState == BatchQueueState.QUEUED }
+        val done = loaded.filter { it.queueState == BatchQueueState.DONE }
+        otherBatches = demoted + queued + done
+        if (firstActive != null && !isTerminal(firstActive.status)) {
+            record = firstActive
+        } else {
+            if (firstActive != null) {
+                Log.d(
+                    TAG,
+                    "adoptLoaded: persisted ACTIVE batch ${firstActive.id} " +
+                        "is terminal, marking DONE"
+                )
+                otherBatches = otherBatches + firstActive.copy(queueState = BatchQueueState.DONE)
+            }
+            record = null
         }
     }
 
@@ -964,6 +1011,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             )
         } catch (e: Exception) {
             // store is best-effort; the batches continue in memory
+            Log.e(TAG, "persist failed", e)
         }
         publish()
     }

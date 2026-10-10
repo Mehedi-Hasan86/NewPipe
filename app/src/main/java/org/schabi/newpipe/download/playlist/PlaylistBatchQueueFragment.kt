@@ -319,7 +319,11 @@ class PlaylistBatchQueueFragment : Fragment() {
                 val cleared = manager.clearFinished()
                 Toast.makeText(
                     requireContext(),
-                    getString(R.string.playlist_batch_cleared_finished, cleared),
+                    if (cleared > 0) {
+                        getString(R.string.playlist_batch_cleared_finished, cleared)
+                    } else {
+                        getString(R.string.playlist_batch_no_finished)
+                    },
                     Toast.LENGTH_SHORT
                 ).show()
             }

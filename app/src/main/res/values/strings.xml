@@ -636,6 +636,7 @@
     <string name="playlist_batch_clear_finished">Clear finished</string>
     <string name="playlist_batch_confirm_clear_finished">Remove all finished batches? Downloaded files are kept.</string>
     <string name="playlist_batch_cleared_finished">%1$d finished batches removed</string>
+    <string name="playlist_batch_no_finished">No finished batches</string>
     <string name="playlist_batch_retry_failed">Retry failed</string>
     <string name="playlist_batch_retry_failed_toast">%1$d failed videos re-queued</string>
     <string name="playlist_batch_delete_batch">Delete batch</string>

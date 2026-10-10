@@ -6,6 +6,7 @@
 package org.schabi.newpipe.download.playlist
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -103,6 +104,7 @@ data class BatchQueueFile(
  * (`filesDir/playlist_batch/batch_queue.json`), independent of newpipe.db.
  */
 object BatchStore {
+    private const val TAG = "PlaylistBatch"
     private const val DIR_NAME = "playlist_batch"
     private const val FILE_NAME = "batch_queue.json"
     private const val LEGACY_FILE_NAME = "current_batch.json"
@@ -175,12 +177,30 @@ object BatchStore {
         val dir = storeDir(context)
         val file = File(dir, FILE_NAME)
         val tmp = File(dir, "$FILE_NAME.tmp")
-        tmp.writeText(json.encodeToString(BatchQueueFile.serializer(), queue))
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            tmp.renameTo(file)
+        val encoded: String = try {
+            json.encodeToString(BatchQueueFile.serializer(), queue)
+        } catch (e: Exception) {
+            Log.e(TAG, "persist failed: encode batches=${queue.batches.size}", e)
+            throw e
         }
-        File(dir, LEGACY_FILE_NAME).delete()
+        try {
+            tmp.writeText(encoded)
+            var renamed = tmp.renameTo(file)
+            if (!renamed) {
+                file.delete()
+                renamed = tmp.renameTo(file)
+            }
+            Log.d(
+                TAG,
+                "persist: path=${file.absolutePath} bytes=${encoded.length} " +
+                    "batches=${queue.batches.size} renamed=$renamed tmpExists=${tmp.exists()} " +
+                    "lastModified=${file.lastModified()}"
+            )
+            File(dir, LEGACY_FILE_NAME).delete()
+        } catch (e: Exception) {
+            Log.e(TAG, "persist failed: write path=${file.absolutePath}", e)
+            throw e
+        }
     }
 
     /** Deletes both the version 2 queue file and any legacy version 1 file, if any. */
