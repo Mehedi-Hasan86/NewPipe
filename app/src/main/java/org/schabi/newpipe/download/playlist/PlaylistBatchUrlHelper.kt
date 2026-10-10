@@ -111,6 +111,19 @@ object PlaylistBatchUrlHelper {
         }
     }
 
+    /**
+     * Stable identity of a playlist for batch deduplication and folder reuse:
+     * `"<serviceId>:<playlistId>"`, or blank when no playlist id can be found.
+     *
+     * @param serviceId the streaming service id
+     * @param url the playlist URL as stored on the batch
+     * @return the playlist key, or blank
+     */
+    fun playlistKey(serviceId: Int, url: String): String {
+        val listId = extractListParam(url) ?: return ""
+        return "$serviceId:$listId"
+    }
+
     private fun extractOrigin(url: String): String? {
         return try {
             val uri = Uri.parse(url)

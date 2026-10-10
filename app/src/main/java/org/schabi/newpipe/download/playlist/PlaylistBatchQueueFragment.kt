@@ -95,8 +95,8 @@ class PlaylistBatchQueueFragment : Fragment() {
         binding.batchList.adapter = batchAdapter
 
         adapter = PlaylistBatchQueueAdapter(
-            onRetry = { url -> manager.retryItem(url) },
-            onCancel = { url -> manager.cancelItem(url) }
+            onRetry = { url -> selectedBatchId?.let { manager.retryItem(it, url) } },
+            onCancel = { url -> selectedBatchId?.let { manager.cancelItem(it, url) } }
         )
         binding.queueList.layoutManager = LinearLayoutManager(requireContext())
         binding.queueList.adapter = adapter
@@ -155,7 +155,7 @@ class PlaylistBatchQueueFragment : Fragment() {
             }
         }
         manager.askLanguageEvent.observe(viewLifecycleOwner) { event ->
-            event.consume()?.let { urls -> showAskLanguageDialog(urls) }
+            event.consume()?.let { request -> showAskLanguageDialog(request) }
         }
         requireActivity().addMenuProvider(
             batchMenuProvider,
@@ -163,6 +163,11 @@ class PlaylistBatchQueueFragment : Fragment() {
             Lifecycle.State.RESUMED
         )
         manager.restoreIfNeeded()
+        manager.pendingSelectBatchId?.let { pending ->
+            manager.pendingSelectBatchId = null
+            selectedBatchId = null
+            selectBatch(pending)
+        }
         if (selectedBatchId != null) {
             selectBatch(selectedBatchId!!)
         } else {
@@ -204,9 +209,14 @@ class PlaylistBatchQueueFragment : Fragment() {
     }
 
     private fun selectBatch(batchId: String) {
+        val live = manager.uiState.value
+        val known = (live != null && live.batchId == batchId) ||
+            manager.itemsSnapshot(batchId) != null
+        if (!known) {
+            return
+        }
         selectedBatchId = batchId
         showItems()
-        val live = manager.uiState.value
         if (live != null && live.batchId == batchId) {
             render(live)
         } else {
@@ -428,7 +438,8 @@ class PlaylistBatchQueueFragment : Fragment() {
         }
     }
 
-    private fun showAskLanguageDialog(urls: List<String>) {
+    private fun showAskLanguageDialog(request: AskLanguageRequest) {
+        val urls = request.urls
         AlertDialog.Builder(requireContext())
             .setTitle(R.string.playlist_batch_ask_language_title)
             .setMessage(
@@ -439,7 +450,7 @@ class PlaylistBatchQueueFragment : Fragment() {
                 )
             )
             .setPositiveButton(R.string.playlist_batch_ask_language_retry) { _, _ ->
-                manager.retrySkippedWithOriginal(urls)
+                manager.retrySkippedWithOriginal(request.batchId, urls)
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
@@ -457,6 +468,7 @@ class PlaylistBatchQueueFragment : Fragment() {
             if (!dragEnabled) {
                 return false
             }
+            val selected = selectedBatchId ?: return false
             val fromUrl = adapter.urlAt(viewHolder.bindingAdapterPosition) ?: return false
             val toUrl = adapter.urlAt(target.bindingAdapterPosition) ?: return false
             val from = adapter.pendingIndex(fromUrl)
@@ -464,7 +476,7 @@ class PlaylistBatchQueueFragment : Fragment() {
             if (from < 0 || to < 0) {
                 return false
             }
-            manager.movePending(from, to)
+            manager.movePending(selected, from, to)
             return true
         }
 

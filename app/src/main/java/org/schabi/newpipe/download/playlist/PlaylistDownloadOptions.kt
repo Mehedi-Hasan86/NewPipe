@@ -93,7 +93,13 @@ data class PlaylistDownloadOptions(
     /** When true, new items only start on unmetered (Wi-Fi) networks. */
     val wifiOnly: Boolean = false,
     /** Per-item auto-retries after a failure, with backoff. */
-    val maxRetries: Int = DEFAULT_MAX_RETRIES
+    val maxRetries: Int = DEFAULT_MAX_RETRIES,
+    /**
+     * Download root folders captured at batch creation time (content URIs as strings).
+     * Null for batches created before this existed; then the current preferences apply.
+     */
+    val videoRootUri: String? = null,
+    val audioRootUri: String? = null
 ) : Serializable {
     companion object {
         const val AUDIO_LANGUAGE_ORIGINAL = "original"

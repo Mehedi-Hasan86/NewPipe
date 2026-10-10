@@ -80,6 +80,12 @@ data class BatchUiState(
     val overallFraction: Double
 )
 
+/** One pending language decision: which batch asked, and which item urls. */
+data class AskLanguageRequest(
+    val batchId: String,
+    val urls: List<String>
+)
+
 /** One row of the batch queue screen (batch list). */
 data class BatchSummary(
     val batchId: String,
@@ -147,8 +153,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     val folderEvent: LiveData<BatchEvent<String>> = _folderEvent
 
     /** Fired once when ASK_AT_END items await a decision. */
-    private val _askLanguageEvent = MutableLiveData<BatchEvent<List<String>>>()
-    val askLanguageEvent: LiveData<BatchEvent<List<String>>> = _askLanguageEvent
+    private val _askLanguageEvent = MutableLiveData<BatchEvent<AskLanguageRequest>>()
+    val askLanguageEvent: LiveData<BatchEvent<AskLanguageRequest>> = _askLanguageEvent
 
     private var record: BatchRecord? = null
 
@@ -157,6 +163,12 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * batches. Together with [record] this is the whole persisted queue.
      */
     private var otherBatches: List<BatchRecord> = emptyList()
+
+    /** Stable subfolder name per playlist key (persisted with the queue). */
+    private var folderNames: MutableMap<String, String> = mutableMapOf()
+
+    /** Transient queue-screen selection requested from elsewhere (not persisted). */
+    var pendingSelectBatchId: String? = null
     private var binder: DownloadManagerService.DownloadManagerBinder? = null
     private var bound = false
     private var pendingAfterBind: (() -> Unit)? = null
@@ -216,14 +228,28 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     // ------------------------------------------------------------------
 
     /**
+     * Outcome of [startBatch]: a new batch, or a duplicate of an ACTIVE/QUEUED one.
+     *
+     * @param batchId the new or existing batch id
+     * @param position 0 when running now, otherwise the 1-based position among QUEUED
+     * @param isNew true when a batch was created, false for duplicates
+     */
+    data class StartBatchResult(
+        val batchId: String,
+        val position: Int,
+        val isNew: Boolean
+    )
+
+    /**
      * Enqueues a new batch. Each batch keeps the options captured here at creation time
      * (folder, subfolder, quality, audio language, naming, duplicate policy).
      * When no batch is ACTIVE the new batch starts immediately, otherwise it is QUEUED
      * behind the existing batches and runs automatically when its turn comes
      * (sequential FIFO, oldest first).
+     * A playlist that is already ACTIVE or QUEUED is not added twice: the existing
+     * batch is returned so the UI can offer Open / Add-missing-only instead.
      *
-     * @return 0 when the batch became ACTIVE at once, otherwise its 1-based position
-     * among the QUEUED batches
+     * @return what happened (new ACTIVE/QUEUED batch, or the duplicate)
      */
     fun startBatch(
         playlistName: String,
@@ -232,8 +258,29 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         items: List<PlaylistBatchItem>,
         options: PlaylistDownloadOptions,
         overrides: Map<String, PerItemOverride>
-    ): Int {
+    ): StartBatchResult {
         Log.d(TAG, "startBatch: playlistName=$playlistName, items=${items.size}")
+        val key = PlaylistBatchUrlHelper.playlistKey(serviceId, playlistUrl)
+        Log.d(TAG, "startBatch: playlistKey=$key")
+        activeOrQueuedByKey(key)?.let { existing ->
+            val position = if (existing.id == record?.id) {
+                0
+            } else {
+                queuedPosition(existing.id)
+            }
+            Log.d(TAG, "startBatch: duplicate playlistKey=$key batch=${existing.id}")
+            return StartBatchResult(existing.id, position, false)
+        }
+        var batchOptions = options
+        if (key.isNotBlank() &&
+            otherBatches.any { it.playlistKey == key && it.queueState == BatchQueueState.DONE }
+        ) {
+            // Re-downloading a finished playlist: reuse its folder (via the map) and
+            // default to SKIP so existing files are kept instead of re-downloaded.
+            batchOptions = batchOptions.copy(duplicateAction = DuplicateAction.SKIP)
+            Log.d(TAG, "startBatch: DONE batch with playlistKey=$key exists, defaulting to SKIP")
+        }
+        batchOptions = captureRoots(batchOptions)
         val now = System.currentTimeMillis()
         val fresh = BatchRecord(
             id = UUID.randomUUID().toString(),
@@ -243,7 +290,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             createdAt = now,
             status = BatchStatus.RUNNING,
             queueState = BatchQueueState.QUEUED,
-            options = options,
+            playlistKey = key,
+            options = batchOptions,
             items = items.map { item ->
                 BatchItemRecord(
                     url = item.url,
@@ -257,6 +305,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             }
         )
         Log.d(TAG, "startBatch: created BatchRecord id=${fresh.id} with ${fresh.items.size} items")
+        val folderName = folderNameFor(fresh, fresh.items.firstOrNull()?.title.orEmpty())
+        Log.d(TAG, "startBatch: playlistKey=$key folder=$folderName")
         if (record == null) {
             if (otherBatches.any { it.queueState == BatchQueueState.QUEUED }) {
                 // Should not happen (finish/advance keeps the invariant), but a new
@@ -265,7 +315,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 Log.d(TAG, "batch added id=${fresh.id} state=QUEUED")
                 persist()
                 activateNextBatch()
-                return queuedPosition(fresh.id)
+                return StartBatchResult(fresh.id, queuedPosition(fresh.id), true)
             }
             record = fresh.copy(queueState = BatchQueueState.ACTIVE)
             liveMissions.clear()
@@ -275,13 +325,78 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             persist()
             ensureBound { pump() }
             checkLowSpace()
-            return 0
+            return StartBatchResult(fresh.id, 0, true)
         }
         otherBatches = otherBatches + fresh
         val position = queuedPosition(fresh.id)
         Log.d(TAG, "batch added id=${fresh.id} state=QUEUED position=$position")
         persist()
-        return position
+        return StartBatchResult(fresh.id, position, true)
+    }
+
+    /** The ACTIVE or QUEUED batch with [key] (blank keys never match), or null. */
+    private fun activeOrQueuedByKey(key: String): BatchRecord? {
+        if (key.isBlank()) {
+            return null
+        }
+        record?.takeIf { it.playlistKey == key }?.let { return it }
+        return otherBatches.firstOrNull {
+            it.playlistKey == key && it.queueState == BatchQueueState.QUEUED
+        }
+    }
+
+    /**
+     * Captures the current download root folders into the options, so later
+     * preference changes never move already-queued batches.
+     *
+     * @param options the options chosen in the intake screen
+     * @return the options with roots filled in
+     */
+    private fun captureRoots(options: PlaylistDownloadOptions): PlaylistDownloadOptions {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(appContext)
+        val videoKey = appContext.getString(R.string.download_path_video_key)
+        val audioKey = appContext.getString(R.string.download_path_audio_key)
+        return options.copy(
+            videoRootUri = options.videoRootUri
+                ?: prefs.getString(videoKey, null)?.takeIf { it.isNotBlank() },
+            audioRootUri = options.audioRootUri
+                ?: prefs.getString(audioKey, null)?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    /**
+     * Stable subfolder name for [batch]: the mapped name for its playlist key, assigning
+     * `base`, `base (2)`, ... on first use. Batches without a key get a unique folder.
+     *
+     * @param batch the batch needing a folder
+     * @param fallbackTitle used when the batch has no playlist name
+     * @return the subfolder name to use
+     */
+    private fun folderNameFor(batch: BatchRecord, fallbackTitle: String): String {
+        val key = batch.playlistKey.ifBlank { "batch:${batch.id}" }
+        folderNames[key]?.let { return it }
+        val base = sanitizeSubfolderName(batch.playlistName.ifBlank { fallbackTitle })
+        var name = base
+        var suffix = 2
+        val taken = folderNames.values.toSet()
+        while (name in taken) {
+            name = "$base ($suffix)"
+            suffix++
+        }
+        folderNames[key] = name
+        Log.d(TAG, "folderNameFor: playlistKey=$key folder=$name")
+        return name
+    }
+
+    /**
+     * Sanitizes a playlist title into a provider-safe folder name.
+     *
+     * @param title the raw playlist (or video) title
+     * @return the sanitized name, or "playlist" when blank
+     */
+    private fun sanitizeSubfolderName(title: String): String {
+        return FilenameUtils.createFilename(appContext, title)
+            .replace("!", "").trim().trimEnd('.', ' ').ifBlank { "playlist" }
     }
 
     /** 1-based position of [batchId] among the QUEUED batches (0 when not queued). */
@@ -350,8 +465,96 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         finishActiveBatch(current.copy(status = BatchStatus.CANCELLED, items = items))
     }
 
-    fun retryItem(url: String) {
-        val current = record ?: return
+    /**
+     * Adds items missing from an ACTIVE or QUEUED batch: urls not present at all, plus
+     * FAILED ones (reset to PENDING with cleared counters). Anything else is left alone.
+     *
+     * @param batchId the ACTIVE or QUEUED batch to merge into
+     * @param items candidate items (only missing/failed urls are used)
+     * @param overrides per-item overrides for the merged items
+     * @return how many items were added or reset
+     */
+    fun mergeMissing(
+        batchId: String,
+        items: List<PlaylistBatchItem>,
+        overrides: Map<String, PerItemOverride>
+    ): Int {
+        val active = record
+        if (active != null && active.id == batchId) {
+            val (merged, updated) = mergeInto(active, items, overrides)
+            if (merged == 0) {
+                return 0
+            }
+            Log.d(TAG, "mergeMissing: batch=$batchId added=$merged state=ACTIVE")
+            record = updated
+            persist()
+            ensureBound { pump() }
+            return merged
+        }
+        val target = otherBatches.firstOrNull {
+            it.id == batchId && it.queueState == BatchQueueState.QUEUED
+        } ?: return 0
+        val (merged, updated) = mergeInto(target, items, overrides)
+        if (merged == 0) {
+            return 0
+        }
+        Log.d(TAG, "mergeMissing: batch=$batchId added=$merged state=QUEUED")
+        otherBatches = otherBatches.map { if (it.id == batchId) updated else it }
+        persist()
+        return merged
+    }
+
+    private fun mergeInto(
+        batch: BatchRecord,
+        items: List<PlaylistBatchItem>,
+        overrides: Map<String, PerItemOverride>
+    ): Pair<Int, BatchRecord> {
+        val urls = items.map { it.url }.toSet()
+        val existing = batch.items.map { it.url }.toSet()
+        var position = batch.items.maxOfOrNull { it.position } ?: 0
+        var merged = 0
+        val kept = batch.items.map { item ->
+            if (item.status == BatchItemStatus.FAILED && item.url in urls) {
+                merged++
+                item.copy(
+                    status = BatchItemStatus.PENDING,
+                    retryCount = 0,
+                    failureReason = null,
+                    lastProgress = 0.0,
+                    override = overrides[item.url] ?: item.override
+                )
+            } else {
+                item
+            }
+        }
+        val added = items.filter { it.url !in existing }.map { item ->
+            merged++
+            position++
+            BatchItemRecord(
+                url = item.url,
+                title = item.title,
+                position = position,
+                serviceId = item.serviceId,
+                uploaderName = item.uploaderName,
+                uploadDateText = item.uploadDateText,
+                override = overrides[item.url]
+            )
+        }
+        return merged to batch.copy(items = kept + added)
+    }
+
+    /**
+     * Retries one item of the ACTIVE batch only; requests for other batches are ignored.
+     *
+     * @param batchId the batch that must currently be ACTIVE
+     * @param url the item url to re-queue
+     */
+    fun retryItem(batchId: String, url: String) {
+        val current = record
+        if (current == null || current.id != batchId) {
+            Log.d(TAG, "retryItem: ignoring url=$url for non-active batch $batchId")
+            return
+        }
         val items = current.items.map { item ->
             if (item.url == url && !isActiveStatus(item.status)) {
                 item.copy(
@@ -370,15 +573,25 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         ensureBound { pump() }
     }
 
-    fun cancelItem(url: String) {
-        val current = record ?: return
-        findLiveMission(url)?.let { mission ->
+    /**
+     * Cancels one item of the ACTIVE batch only; requests for other batches are ignored.
+     *
+     * @param batchId the batch that must currently be ACTIVE
+     * @param url the item url to cancel
+     */
+    fun cancelItem(batchId: String, url: String) {
+        val current = record
+        if (current == null || current.id != batchId) {
+            Log.d(TAG, "cancelItem: ignoring url=$url for non-active batch $batchId")
+            return
+        }
+        findLiveMission(url, current.id)?.let { mission ->
             try {
                 binder?.getDownloadManager()?.deleteMission(mission, true)
             } catch (e: Exception) {
                 // already gone
             }
-            liveMissions.remove(missionKey(mission))
+            liveMissions.remove(missionMapKey(current.id, missionKey(mission)))
         }
         record = current.copy(
             items = current.items.map { item ->
@@ -394,9 +607,18 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         pump()
     }
 
-    /** Moves a PENDING item within the queue order. */
-    fun movePending(fromQueueIndex: Int, toQueueIndex: Int) {
-        val current = record ?: return
+    /**
+     * Moves a PENDING item of the ACTIVE batch within the queue order.
+     *
+     * @param batchId the batch that must currently be ACTIVE
+     * @param fromQueueIndex index among PENDING items to move from
+     * @param toQueueIndex index among PENDING items to move to
+     */
+    fun movePending(batchId: String, fromQueueIndex: Int, toQueueIndex: Int) {
+        val current = record
+        if (current == null || current.id != batchId) {
+            return
+        }
         val pending = current.items.filter { it.status == BatchItemStatus.PENDING }.toMutableList()
         if (fromQueueIndex !in pending.indices || toQueueIndex !in pending.indices) {
             return
@@ -413,9 +635,20 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         publish()
     }
 
-    /** Re-queues ASK_AT_END language-skipped items with the Original track. */
-    fun retrySkippedWithOriginal(urls: List<String>) {
-        val current = record ?: return
+    /**
+     * Re-queues ASK_AT_END language-skipped items with the Original track.
+     * Only applies when [batchId] is still the ACTIVE batch; late answers for
+     * finished batches are ignored instead of leaking into the next batch.
+     *
+     * @param batchId the batch that asked (must currently be ACTIVE)
+     * @param urls the skipped item urls to re-queue
+     */
+    fun retrySkippedWithOriginal(batchId: String, urls: List<String>) {
+        val current = record
+        if (current == null || current.id != batchId) {
+            Log.d(TAG, "retrySkippedWithOriginal: ignoring non-active batch $batchId")
+            return
+        }
         val urlSet = urls.toSet()
         val items = current.items.map { item ->
             if (item.url in urlSet && item.status == BatchItemStatus.SKIPPED) {
@@ -631,11 +864,17 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             publish()
             return
         }
-        val loaded = BatchStore.loadQueue(appContext)
+        val stored = BatchStore.loadQueue(appContext)
+        folderNames = stored.folderNames.toMutableMap()
+        val loaded = stored.batches
         Log.d(TAG, "restoreIfNeeded: loaded ${loaded.size} batches from store")
         if (loaded.isEmpty()) {
             publish()
             return
+        }
+        // Seed stable folder names for every known batch (migrated ones included).
+        for (batch in loaded) {
+            folderNameFor(batch, batch.items.firstOrNull()?.title.orEmpty())
         }
         val actives = loaded.filter { it.queueState == BatchQueueState.ACTIVE }
         val firstActive = actives.firstOrNull()
@@ -716,7 +955,13 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private fun persist() {
         try {
-            BatchStore.saveQueue(appContext, listOfNotNull(record) + otherBatches)
+            BatchStore.saveQueue(
+                appContext,
+                BatchQueueFile(
+                    batches = listOfNotNull(record) + otherBatches,
+                    folderNames = folderNames.toMap()
+                )
+            )
         } catch (e: Exception) {
             // store is best-effort; the batches continue in memory
         }
@@ -1148,13 +1393,17 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     /** Main video/audio folder, or the playlist subfolder inside it. */
     @Throws(IOException::class)
     private fun targetDirectory(audioOnly: Boolean, item: BatchItemRecord): StoredDirectoryHelper {
+        val current = record
         val prefs = PreferenceManager.getDefaultSharedPreferences(appContext)
         val key = if (audioOnly) {
             appContext.getString(R.string.download_path_audio_key)
         } else {
             appContext.getString(R.string.download_path_video_key)
         }
-        val path = prefs.getString(key, null)
+        // Roots were captured into the batch options at creation time; preferences
+        // are only a legacy fallback for batches created before that.
+        val path = (if (audioOnly) current?.options?.audioRootUri else current?.options?.videoRootUri)
+            ?: prefs.getString(key, null)
         if (path.isNullOrBlank()) {
             throw FolderMissingException(key)
         }
@@ -1168,22 +1417,18 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         } catch (e: Exception) {
             throw FolderMissingException(key)
         }
-        val options = record?.options
-        if (options?.usePlaylistSubfolder != true) {
+        if (current == null || !current.options.usePlaylistSubfolder) {
             Log.d(TAG, "targetDirectory: using root folder $path")
             return main
         }
-        // FilenameUtils applies the user's charset; additionally strip '!' and trailing
-        // dots/spaces, which SAF providers and Windows-style names reject
-        // (e.g. "Switching to Linux Challenge!").
-        val subName = FilenameUtils.createFilename(
-            appContext,
-            record?.playlistName.orEmpty().ifBlank { item.title }
-        ).replace("!", "").trim().trimEnd('.', ' ').ifBlank { "playlist" }
-        Log.d(TAG, "targetDirectory: root=$path subfolder=$subName")
+        // Stable per-playlist folder from the persisted map: the same playlistKey
+        // always reuses its folder, title collisions get "Name (2)", ... instead of
+        // title-only naming that mixed different playlists together.
+        val folderName = folderNameFor(current, item.title)
+        Log.d(TAG, "targetDirectory: root=$path subfolder=$folderName key=${current.playlistKey}")
         val sub = main.getSubfolder(
             appContext,
-            subName,
+            folderName,
             if (audioOnly) DownloadManager.TAG_AUDIO else DownloadManager.TAG_VIDEO
         )
         Log.d(TAG, "targetDirectory: dirUri=${sub.uri} tag=${sub.tag}")
@@ -1324,6 +1569,27 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     // ---------------- mission events ----------------
 
+    /**
+     * Finds the batch and item owning [storageUri] (active batch first).
+     *
+     * @param storageUri the target file URI of a mission
+     * @return the owning batch and item, or null when unknown
+     */
+    private fun findBatchItemByStorageUri(storageUri: String): Pair<BatchRecord, BatchItemRecord>? {
+        val current = record
+        if (current != null) {
+            current.items.firstOrNull { it.storageUri == storageUri }?.let {
+                return current to it
+            }
+        }
+        for (batch in otherBatches) {
+            batch.items.firstOrNull { it.storageUri == storageUri }?.let {
+                return batch to it
+            }
+        }
+        return null
+    }
+
     private fun missionKey(mission: DownloadMission): String {
         return try {
             mission.storage.uri.toString()
@@ -1332,29 +1598,63 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
     }
 
-    private fun findLiveMission(url: String): DownloadMission? {
-        val current = record ?: return null
-        val storageUri = current.items.firstOrNull { it.url == url }?.storageUri
-            ?: return liveMissions.values.firstOrNull { it.source == url }
-        return liveMissions[storageUri]
+    /** Map key scoping a mission to its batch: batch id + storage URI. */
+    private fun missionMapKey(batchId: String, storageUri: String): String {
+        return "$batchId\n$storageUri"
+    }
+
+    private fun batchById(batchId: String): BatchRecord? {
+        record?.takeIf { it.id == batchId }?.let { return it }
+        return otherBatches.firstOrNull { it.id == batchId }
+    }
+
+    /**
+     * Live mission for [url] inside [batchId] only. The url/`source` fallback never
+     * leaves the batch, so another batch's mission is never returned.
+     *
+     * @param url the item url to look up
+     * @param batchId the owning batch, or null to look up nothing
+     * @return the live mission, or null
+     */
+    private fun findLiveMission(url: String, batchId: String?): DownloadMission? {
+        if (batchId == null) {
+            return null
+        }
+        val batch = batchById(batchId) ?: return null
+        val storageUri = batch.items.firstOrNull { it.url == url }?.storageUri
+            ?: return liveMissions.entries
+                .firstOrNull { (key, mission) ->
+                    key.startsWith("$batchId\n") && mission.source == url
+                }?.value
+        return liveMissions[missionMapKey(batchId, storageUri)]
     }
 
     private fun onMissionMessage(what: Int, mission: DownloadMission?): Boolean {
         if (mission == null) {
             return false
         }
-        val key = missionKey(mission)
-        if (key.isNotBlank()) {
-            if (what == DownloadManagerService.MESSAGE_DELETED) {
-                liveMissions.remove(key)
-                return true
+        val storageUri = missionKey(mission)
+        if (what == DownloadManagerService.MESSAGE_DELETED) {
+            if (storageUri.isNotBlank()) {
+                liveMissions.keys
+                    .filter { it == storageUri || it.endsWith("\n$storageUri") }
+                    .forEach { liveMissions.remove(it) }
             }
-            liveMissions[key] = mission
+            return true
         }
+        if (storageUri.isBlank()) {
+            return false
+        }
+        // Attribute the event to the owning batch; events for missions of
+        // non-ACTIVE batches are ignored instead of leaking into the active one.
+        val owner = findBatchItemByStorageUri(storageUri) ?: return false
+        if (owner.first.id != record?.id) {
+            Log.d(TAG, "onMissionMessage: ignoring event for non-active batch ${owner.first.id}")
+            return false
+        }
+        liveMissions[missionMapKey(owner.first.id, storageUri)] = mission
         val current = record ?: return false
-        val item = current.items.firstOrNull { batchItem ->
-            batchItem.storageUri != null && batchItem.storageUri == key
-        } ?: return false
+        val item = owner.second
         if (!isActiveStatus(item.status)) {
             return false
         }
@@ -1367,9 +1667,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
             DownloadManagerService.MESSAGE_FINISHED -> {
                 if (mission.isFinished) {
-                    Log.d(TAG, "mission finished: batch=${current.id} url=${item.url} file=$key")
+                    Log.d(TAG, "mission finished: batch=${current.id} url=${item.url} file=$storageUri")
                     setItemStatus(item.url, BatchItemStatus.COMPLETED, null)
-                    liveMissions.remove(key)
+                    liveMissions.remove(missionMapKey(current.id, storageUri))
                     pump()
                 }
             }
@@ -1420,7 +1720,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             if (!isActiveStatus(item.status)) {
                 return@map item
             }
-            val mission = findLiveMission(item.url) ?: return@map item
+            val mission = findLiveMission(item.url, current.id) ?: return@map item
             val length = mission.getLength().coerceAtLeast(0L)
             val done = mission.done.coerceAtLeast(0L)
             val fraction = if (length > 0) (done.toDouble() / length).coerceIn(0.0, 1.0) else 0.0
@@ -1441,16 +1741,17 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
     }
 
-    private fun speedFor(url: String, done: Long): Pair<Long, Long> {
+    private fun speedFor(batchId: String, url: String, done: Long): Pair<Long, Long> {
         val now = System.currentTimeMillis()
-        val last = speedSamples[url]
-        speedSamples[url] = Pair(now, done)
+        val sampleKey = "$batchId\n$url"
+        val last = speedSamples[sampleKey]
+        speedSamples[sampleKey] = Pair(now, done)
         if (last == null) {
             return Pair(0L, -1L)
         }
         val dt = (now - last.first).coerceAtLeast(1L)
         val speed = (done - last.second).coerceAtLeast(0L) * 1000L / dt
-        val mission = findLiveMission(url)
+        val mission = findLiveMission(url, batchId)
         val length = mission?.getLength()?.coerceAtLeast(0L) ?: 0L
         val eta = if (speed > 0 && length > done) (length - done) / speed else -1L
         return Pair(speed, eta)
@@ -1488,7 +1789,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 item.copy(status = BatchItemStatus.PENDING, failureReason = null)
             } else {
                 // A mission is only found through a non-null storage URI.
-                liveMissions[requireNotNull(storageUri)] = mission
+                liveMissions[missionMapKey(current.id, requireNotNull(storageUri))] = mission
                 when {
                     mission.isFinished -> {
                         Log.d(TAG, "reconcileAfterRestart: mission finished for ${item.url}")
@@ -1581,9 +1882,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             return
         }
         val askUrls = current.askLanguageUrls
+        val finishedId = current.id
         finishActiveBatch(current.copy(status = BatchStatus.COMPLETED))
         if (askUrls.isNotEmpty()) {
-            _askLanguageEvent.value = BatchEvent(askUrls)
+            _askLanguageEvent.value = BatchEvent(AskLanguageRequest(finishedId, askUrls))
         }
     }
 
@@ -1718,8 +2020,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private fun pauseActiveMissions() {
         val manager = manager() ?: return
-        record?.items?.forEach { item ->
-            findLiveMission(item.url)?.let { mission ->
+        val current = record ?: return
+        current.items.forEach { item ->
+            findLiveMission(item.url, current.id)?.let { mission ->
                 try {
                     manager.pauseMission(mission)
                 } catch (e: Exception) {
@@ -1731,9 +2034,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private fun resumeActiveMissions() {
         val manager = manager() ?: return
-        record?.items?.forEach { item ->
+        val current = record ?: return
+        current.items.forEach { item ->
             if (isActiveStatus(item.status)) {
-                findLiveMission(item.url)?.let { mission ->
+                findLiveMission(item.url, current.id)?.let { mission ->
                     try {
                         manager.resumeMission(mission)
                     } catch (e: Exception) {
@@ -1746,8 +2050,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private fun deleteActiveMissions(alsoDeleteFile: Boolean = true) {
         val manager = manager() ?: return
-        record?.items?.forEach { item ->
-            findLiveMission(item.url)?.let { mission ->
+        val current = record ?: return
+        current.items.forEach { item ->
+            findLiveMission(item.url, current.id)?.let { mission ->
                 try {
                     if (!alsoDeleteFile) {
                         manager.pauseMission(mission)
@@ -1845,10 +2150,10 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             return
         }
         val items = current.items.map { item ->
-            val mission = findLiveMission(item.url)
+            val mission = findLiveMission(item.url, current.id)
             val done = mission?.done?.coerceAtLeast(0L) ?: 0L
             val (speed, eta) = if (isActiveStatus(item.status) && mission != null) {
-                speedFor(item.url, done)
+                speedFor(current.id, item.url, done)
             } else {
                 Pair(0L, -1L)
             }

@@ -224,9 +224,7 @@ class PlaylistBatchFragment : Fragment() {
         val header = viewModel.header.value
         val playlistName = header?.name?.takeIf { it.isNotBlank() }
             ?: initialArgs().third.orEmpty()
-        // Sequential FIFO: the batch starts at once when nothing is ACTIVE,
-        // otherwise it is queued (position is 1-based among queued batches).
-        val position = manager.startBatch(
+        val result = manager.startBatch(
             playlistName = playlistName,
             playlistUrl = viewModel.currentUrl(),
             serviceId = viewModel.currentServiceId(),
@@ -234,14 +232,51 @@ class PlaylistBatchFragment : Fragment() {
             options = options,
             overrides = overrides
         )
-        if (position > 0) {
-            Toast.makeText(
-                requireContext(),
-                getString(R.string.playlist_batch_added_to_queue, position),
-                Toast.LENGTH_SHORT
-            ).show()
+        if (result.isNew) {
+            if (result.position > 0) {
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.playlist_batch_added_to_queue, result.position),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            NavigationHelper.openPlaylistBatchQueue(requireContext())
+            return
         }
-        NavigationHelper.openPlaylistBatchQueue(requireContext())
+        showAlreadyQueuedDialog(result.batchId, playlistName, selected, overrides)
+    }
+
+    private fun showAlreadyQueuedDialog(
+        batchId: String,
+        playlistName: String,
+        selected: List<PlaylistBatchItem>,
+        overrides: Map<String, PerItemOverride>
+    ) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.playlist_batch_already_in_queue)
+            .setMessage(getString(R.string.playlist_batch_already_queued_msg, playlistName))
+            .setPositiveButton(R.string.playlist_batch_open) { _, _ ->
+                val manager = BatchDownloadManager.getInstance(requireContext())
+                manager.pendingSelectBatchId = batchId
+                NavigationHelper.openPlaylistBatchQueue(requireContext())
+            }
+            .setNeutralButton(R.string.playlist_batch_add_missing) { _, _ ->
+                val manager = BatchDownloadManager.getInstance(requireContext())
+                val merged = manager.mergeMissing(batchId, selected, overrides)
+                Toast.makeText(
+                    requireContext(),
+                    if (merged > 0) {
+                        getString(R.string.playlist_batch_merged_toast, merged)
+                    } else {
+                        getString(R.string.playlist_batch_nothing_new)
+                    },
+                    Toast.LENGTH_SHORT
+                ).show()
+                manager.pendingSelectBatchId = batchId
+                NavigationHelper.openPlaylistBatchQueue(requireContext())
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     // ------------------------------------------------------------------

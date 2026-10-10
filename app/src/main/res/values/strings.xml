@@ -642,6 +642,12 @@
     <string name="playlist_batch_confirm_delete_batch">Delete this batch? Downloaded files are kept.</string>
     <string name="playlist_batch_confirm_delete_active">Delete the active batch? Running downloads stop. Downloaded files are kept.</string>
     <string name="playlist_batch_batch_actions">Batch actions</string>
+    <string name="playlist_batch_already_in_queue">Already in queue</string>
+    <string name="playlist_batch_already_queued_msg">“%1$s” is already in the batch queue.</string>
+    <string name="playlist_batch_open">Open</string>
+    <string name="playlist_batch_add_missing">Add missing only</string>
+    <string name="playlist_batch_merged_toast">%1$d videos added</string>
+    <string name="playlist_batch_nothing_new">Nothing new to add</string>
     <!-- Players -->
     <string name="caption_none">No Captions</string>
     <string name="resize_fit">Fit</string>

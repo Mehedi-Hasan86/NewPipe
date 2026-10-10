@@ -74,6 +74,11 @@ data class BatchRecord(
     val createdAt: Long = 0L,
     val status: BatchStatus = BatchStatus.RUNNING,
     val queueState: BatchQueueState = BatchQueueState.ACTIVE,
+    /**
+     * Internal playlist identity (`"<serviceId>:<playlistId>"`, blank when unknown).
+     * Used for duplicate detection and subfolder reuse. Never shown in the UI.
+     */
+    val playlistKey: String = "",
     val options: PlaylistDownloadOptions = PlaylistDownloadOptions(),
     val items: List<BatchItemRecord> = emptyList(),
     /** Items skipped for missing language under ASK_AT_END, awaiting the end dialog. */
@@ -84,7 +89,9 @@ data class BatchRecord(
 @Serializable
 data class BatchQueueFile(
     val version: Int = CURRENT_QUEUE_VERSION,
-    val batches: List<BatchRecord> = emptyList()
+    val batches: List<BatchRecord> = emptyList(),
+    /** Stable subfolder name per playlist key, so one playlist always reuses its folder. */
+    val folderNames: Map<String, String> = emptyMap()
 ) {
     companion object {
         const val CURRENT_QUEUE_VERSION = 2
@@ -117,28 +124,29 @@ object BatchStore {
      * Loads the persisted batch queue (schema version 2). A legacy version 1
      * `current_batch.json` (single batch) is migrated into the list as the first
      * batch on first read, keeping every item and its state: terminal batches
-     * become DONE, anything else becomes ACTIVE.
+     * become DONE, anything else becomes ACTIVE. Batches without a playlist key
+     * get one derived from their stored URL (blank when that fails).
      *
      * @param context the Android context
-     * @return the persisted batches in queue order, or empty when none exist
+     * @return the persisted queue file (empty when nothing exists or it is corrupt)
      */
-    fun loadQueue(context: Context): List<BatchRecord> {
+    fun loadQueue(context: Context): BatchQueueFile {
         val dir = storeDir(context)
         val file = File(dir, FILE_NAME)
         if (file.exists()) {
-            try {
+            return try {
                 val stored = json.decodeFromString(
                     BatchQueueFile.serializer(),
                     file.readText()
                 )
-                return stored.batches
+                stored.copy(batches = stored.batches.map { it.withDerivedKey() })
             } catch (e: Exception) {
-                return emptyList()
+                BatchQueueFile()
             }
         }
         val legacy = File(dir, LEGACY_FILE_NAME)
         if (!legacy.exists()) {
-            return emptyList()
+            return BatchQueueFile()
         }
         return try {
             val single = json.decodeFromString(BatchRecord.serializer(), legacy.readText())
@@ -149,26 +157,25 @@ object BatchStore {
             } else {
                 BatchQueueState.ACTIVE
             }
-            listOf(single.copy(queueState = queueState))
+            val migrated = single.copy(queueState = queueState).withDerivedKey()
+            BatchQueueFile(batches = listOf(migrated))
         } catch (e: Exception) {
-            emptyList()
+            BatchQueueFile()
         }
     }
 
     /**
-     * Atomically writes [batches] (temp file + rename). A leftover legacy version 1
+     * Atomically writes [queue] (temp file + rename). A leftover legacy version 1
      * file is deleted after a successful write so it is never migrated twice.
      *
      * @param context the Android context
-     * @param batches the batches in queue order
+     * @param queue the queue file to persist
      */
-    fun saveQueue(context: Context, batches: List<BatchRecord>) {
+    fun saveQueue(context: Context, queue: BatchQueueFile) {
         val dir = storeDir(context)
         val file = File(dir, FILE_NAME)
         val tmp = File(dir, "$FILE_NAME.tmp")
-        tmp.writeText(
-            json.encodeToString(BatchQueueFile.serializer(), BatchQueueFile(batches = batches))
-        )
+        tmp.writeText(json.encodeToString(BatchQueueFile.serializer(), queue))
         if (!tmp.renameTo(file)) {
             file.delete()
             tmp.renameTo(file)
@@ -181,5 +188,12 @@ object BatchStore {
         val dir = storeDir(context)
         File(dir, FILE_NAME).delete()
         File(dir, LEGACY_FILE_NAME).delete()
+    }
+
+    private fun BatchRecord.withDerivedKey(): BatchRecord {
+        if (playlistKey.isNotBlank()) {
+            return this
+        }
+        return copy(playlistKey = PlaylistBatchUrlHelper.playlistKey(serviceId, playlistUrl))
     }
 }
