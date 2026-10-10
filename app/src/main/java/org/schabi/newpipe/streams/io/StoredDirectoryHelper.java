@@ -60,6 +60,21 @@ public class StoredDirectoryHelper {
     @Nullable
     private Uri recordedTreeUri;
 
+    /**
+     * Last file-creation error, so callers can report the real cause instead of a generic
+     * "could not create file" text. See {@link #consumeCreateError()}.
+     */
+    @Nullable
+    private IOException lastCreateError;
+
+    /**
+     * True when {@link #getSubfolder(Context, String, String)} created the subfolder and no
+     * file has been created inside it through this helper yet. Used to remove a
+     * just-created empty subfolder when file creation fails, so failed batches do not
+     * leave empty directories behind.
+     */
+    private boolean createdSubfolder;
+
     private final String tag;
 
     public StoredDirectoryHelper(@NonNull final Context context, @NonNull final Uri path,
@@ -172,23 +187,83 @@ public class StoredDirectoryHelper {
 
     private StoredFileHelper createFile(final String filename, final String mime,
                                         final boolean safe) {
+        lastCreateError = null;
         final StoredFileHelper storage;
 
         try {
             if (docTree == null) {
                 storage = new StoredFileHelper(ioTree, filename, mime);
-            } else {
-                storage = new StoredFileHelper(context, docTree,
-                        recordedTreeUri != null ? recordedTreeUri : docTree.getUri(),
+            } else if (recordedTreeUri != null) {
+                // Playlist-subfolder file: created inside the subfolder document,
+                // parent recorded as the granted root tree (no separate grant needed).
+                storage = new StoredFileHelper(context, docTree, recordedTreeUri,
                         filename, mime, safe);
+            } else {
+                // Original path, exactly like single-video downloads (DownloadDialog).
+                storage = new StoredFileHelper(context, docTree, filename, mime, safe);
             }
         } catch (final IOException e) {
+            lastCreateError = e;
+            Log.e("PlaylistBatch", "createFile failed: root=" + getUri()
+                    + " dir=" + (docTree == null ? String.valueOf(ioTree) : docTree.getUri())
+                    + " name=" + filename + " mime=" + mime, e);
+            deleteCreatedSubfolderIfEmpty();
             return null;
         }
 
+        createdSubfolder = false;
         storage.tag = tag;
 
         return storage;
+    }
+
+    /**
+     * Returns the last file-creation error and clears it, or null when the last creation
+     * succeeded. Lets batch downloads show the real cause instead of a generic text.
+     *
+     * @return the last {@link IOException} from file creation, or null
+     */
+    @Nullable
+    public IOException consumeCreateError() {
+        final IOException error = lastCreateError;
+        lastCreateError = null;
+        return error;
+    }
+
+    /**
+     * Deletes the subfolder when this helper created it, it is still empty, and file
+     * creation through it failed, so failed batches leave no empty directory behind.
+     * Never deletes non-empty folders (parallel batch items may already use them).
+     */
+    private void deleteCreatedSubfolderIfEmpty() {
+        if (!createdSubfolder || docTree == null || context == null) {
+            return;
+        }
+        createdSubfolder = false; // attempt cleanup only once
+        try {
+            if (!isEmptyDirectory(docTree)) {
+                return;
+            }
+            if (docTree.delete()) {
+                Log.d("PlaylistBatch",
+                        "deleted just-created empty subfolder " + docTree.getUri());
+            }
+        } catch (final Exception e) {
+            Log.d("PlaylistBatch", "could not delete just-created subfolder", e);
+        }
+    }
+
+    private boolean isEmptyDirectory(@NonNull final DocumentFile dir) {
+        final Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                dir.getUri(), DocumentsContract.getDocumentId(dir.getUri()));
+        try (Cursor cursor = context.getContentResolver().query(childrenUri,
+                new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID},
+                null, null, null)) {
+            return cursor == null || !cursor.moveToFirst();
+        } catch (final Exception e) {
+            // Unknown state: never delete in that case.
+            return false;
+        }
     }
 
     public Uri getUri() {
@@ -332,8 +407,10 @@ public class StoredDirectoryHelper {
         // Find or create the child inside the granted root tree. Both listing and
         // creating children of the granted root are covered by the root grant.
         DocumentFile sub = findFileSAFHelper(ctx, docTree, name);
+        boolean createdNow = false;
         if (sub == null || !sub.isDirectory()) {
             sub = docTree.createDirectory(name);
+            createdNow = true;
         }
         if (sub == null || !sub.isDirectory()) {
             throw new IOException("Cannot create subfolder " + name + " in " + docTree.getUri());
@@ -354,7 +431,10 @@ public class StoredDirectoryHelper {
         final Uri rootTreeUri = DocumentsContract.buildTreeDocumentUri(authority, rootDocumentId);
         Log.d("PlaylistBatch", "getSubfolder: root=" + rootTreeUri
                 + " subfolder=" + sub.getUri() + " name=" + name);
-        return new StoredDirectoryHelper(ctx, rootTreeUri, subTree, subTag);
+        final StoredDirectoryHelper helper =
+                new StoredDirectoryHelper(ctx, rootTreeUri, subTree, subTag);
+        helper.createdSubfolder = createdNow;
+        return helper;
     }
 
     public Uri findFile(final String filename) {

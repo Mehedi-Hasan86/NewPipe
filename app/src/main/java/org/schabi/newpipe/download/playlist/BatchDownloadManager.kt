@@ -626,9 +626,11 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         } catch (e: FolderMissingException) {
             onFolderMissing(e.prefKey)
         } catch (e: ResolveFailed) {
+            Log.e(TAG, "onStreamInfo: item=${item.url} resolve failed: ${e.message}")
             failItem(item, e.message, canRetry = true)
         } catch (e: Exception) {
-            failItem(item, e.message, canRetry = true)
+            Log.e(TAG, "onStreamInfo: item=${item.url} failed", e)
+            failItem(item, "${e.javaClass.simpleName}: ${e.message}", canRetry = true)
         }
     }
 
@@ -705,7 +707,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             override,
             lang
         )
-        launchMission(item, info, urls, 'v', psName, null, recovery, filename, "video/*")
+        // DownloadDialog passes the concrete stream mime (e.g. video/mp4), never "video/*".
+        val videoMime = if (container == PlaylistVideoContainer.MP4) "video/mp4" else "video/webm"
+        launchMission(item, info, urls, 'v', psName, null, recovery, filename, videoMime)
         maybeStartSubtitle(item, info, options, filename)
     }
 
@@ -827,12 +831,21 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             ?: throw IOException(appContext.getString(R.string.playlist_batch_service_bind_failed))
         val audioOnly = record?.options?.mode == PlaylistBatchMode.AUDIO_ONLY || kind == 's'
         val dir = targetDirectory(audioOnly, item)
-        val existingUri = dir.findFile(filename)
+        Log.d(TAG, "launchMission: item=${item.url} dir=${dir.uri} name=$filename mime=$mime")
+        val existingUri = try {
+            dir.findFile(filename)
+        } catch (e: Exception) {
+            Log.e(TAG, "launchMission: findFile failed for $filename in ${dir.uri}", e)
+            throw IOException(
+                appContext.getString(R.string.playlist_batch_fail_storage) +
+                    " ${e.javaClass.simpleName}: ${e.message}",
+                e
+            )
+        }
 
         val storage: StoredFileHelper
         if (existingUri == null) {
-            storage = dir.createFile(filename, mime)
-                ?: throw IOException(appContext.getString(R.string.playlist_batch_fail_storage))
+            storage = createBatchFile(dir, filename, mime, unique = false)
         } else {
             when (record?.options?.duplicateAction ?: DuplicateAction.OVERWRITE) {
                 DuplicateAction.SKIP -> {
@@ -843,10 +856,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 }
 
                 DuplicateAction.RENAME -> {
-                    storage = dir.createUniqueFile(filename, mime)
-                        ?: throw IOException(
-                            appContext.getString(R.string.playlist_batch_fail_storage)
-                        )
+                    storage = createBatchFile(dir, filename, mime, unique = true)
                 }
 
                 DuplicateAction.OVERWRITE -> {
@@ -881,6 +891,52 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 BatchItemStatus.DOWNLOADING
             )
         }
+    }
+
+    /**
+     * Creates the target file exactly like DownloadDialog does, but keeps the real cause:
+     * the helper records it (see StoredDirectoryHelper.consumeCreateError) and it is
+     * logged with a stack trace and appended to the failure reason.
+     *
+     * @param dir the directory helper from [targetDirectory]
+     * @param filename the sanitized file name
+     * @param mime the concrete stream mime type
+     * @param unique true for createUniqueFile, false for createFile
+     * @return the created file helper, never null
+     * @throws IOException with the real failure cause in its message when creation fails
+     */
+    @Throws(IOException::class)
+    private fun createBatchFile(
+        dir: StoredDirectoryHelper,
+        filename: String,
+        mime: String,
+        unique: Boolean
+    ): StoredFileHelper {
+        val created = if (unique) {
+            dir.createUniqueFile(filename, mime)
+        } else {
+            dir.createFile(filename, mime)
+        }
+        if (created != null) {
+            Log.d(TAG, "createBatchFile: created ${created.uri} parent=${created.parentUri}")
+            return created
+        }
+        val cause = dir.consumeCreateError()
+        Log.e(
+            TAG,
+            "createBatchFile: returned null dir=${dir.uri} name=$filename " +
+                "mime=$mime unique=$unique",
+            cause
+        )
+        val detail = if (cause == null) {
+            ""
+        } else {
+            " ${cause.javaClass.simpleName}: ${cause.message}"
+        }
+        throw IOException(
+            appContext.getString(R.string.playlist_batch_fail_storage) + detail,
+            cause
+        )
     }
 
     /** Main video/audio folder, or the playlist subfolder inside it. */
@@ -938,7 +994,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             setItemStatus(url, BatchItemStatus.PENDING, null)
             return
         }
-        failItem(url, error.message, canRetry = true)
+        Log.e(TAG, "onResolveError: url=$url", error)
+        failItem(url, "${error.javaClass.simpleName}: ${error.message}", canRetry = true)
     }
 
     private fun failItem(item: BatchItemRecord, reason: String?, canRetry: Boolean) {
@@ -948,6 +1005,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     private fun failItem(url: String, reason: String?, canRetry: Boolean) {
         val current = record ?: return
         val item = current.items.firstOrNull { it.url == url } ?: return
+        Log.w(TAG, "failItem: url=$url reason=$reason canRetry=$canRetry retry=${item.retryCount}")
         val options = current.options
         if (canRetry && item.retryCount < options.maxRetries) {
             val items = current.items.map {

@@ -159,7 +159,16 @@ object PlaylistBatchResolver {
         } else {
             override?.videoContainer?.fileSuffix() ?: options.videoContainer.fileSuffix()
         }
-        return base + langSuffix + suffix
+        // Providers reject display names with '!', en dashes or trailing dots/spaces, and a
+        // title that already ends with the suffix must not be extended twice.
+        var cleanBase = base.replace("!", "").replace("–", "-").trim().trimEnd('.', ' ')
+        if (cleanBase.endsWith(suffix, ignoreCase = true)) {
+            cleanBase = cleanBase.dropLast(suffix.length).trimEnd('.', ' ')
+        }
+        if (cleanBase.isBlank()) {
+            cleanBase = index
+        }
+        return cleanBase + langSuffix + suffix
     }
 
     /** Display name of an ISO 639-1 code, e.g. "hi" -> "Hindi". */
