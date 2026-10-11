@@ -27,6 +27,10 @@ reason instead. A rule confirmed 3 times gets promoted into `AGENTS.md`.
 - 2026-10-11 | Tested the same-title folder hypothesis with two
   different-titled playlists | the collision path could never trigger | design
   each test so it can actually trigger the hypothesis, or mark it unverified.
+- 2026-10-11 | Toolbar MenuProvider actions never appeared on device | the queue
+  activity uses the app NoActionBar theme so menus have nowhere to render; the
+  user tapped Delete twice instead of an invisible Clear finished | verify menu
+  UI actually renders on device before relying on it in tests.
 
 ## Obsolete
 
