@@ -21,6 +21,7 @@ import org.schabi.newpipe.databinding.ItemPlaylistBatchRowBinding
 class PlaylistBatchListAdapter(
     private val onSelect: (batchId: String) -> Unit,
     private val onRetryFailed: (batchId: String) -> Unit,
+    private val onCheckNew: (batchId: String) -> Unit,
     private val onMoveQueued: (batchId: String, delta: Int) -> Unit,
     private val onDeleteBatch: (batchId: String, isActive: Boolean) -> Unit
 ) : RecyclerView.Adapter<PlaylistBatchListAdapter.ViewHolder>() {
@@ -96,6 +97,11 @@ class PlaylistBatchListAdapter(
                 when (item.itemId) {
                     R.id.batch_row_retry_failed -> {
                         onRetryFailed(summary.batchId)
+                        true
+                    }
+
+                    R.id.batch_row_check_new -> {
+                        onCheckNew(summary.batchId)
                         true
                     }
 

@@ -5,10 +5,12 @@
 
 package org.schabi.newpipe.download.playlist
 
+import android.content.ComponentCallbacks2
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkRequest
@@ -21,16 +23,21 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.preference.PreferenceManager
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
+import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.schedulers.Schedulers
 import java.io.IOException
 import java.util.UUID
 import org.schabi.newpipe.R
 import org.schabi.newpipe.extractor.MediaFormat
+import org.schabi.newpipe.extractor.Page
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
+import org.schabi.newpipe.extractor.playlist.PlaylistInfo
 import org.schabi.newpipe.extractor.stream.StreamInfo
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.streams.io.StoredDirectoryHelper
 import org.schabi.newpipe.streams.io.StoredFileHelper
+import org.schabi.newpipe.util.ExtractorHelper
 import org.schabi.newpipe.util.FilenameUtils
 import org.schabi.newpipe.util.ListHelper
 import us.shandian.giga.get.DownloadMission
@@ -131,6 +138,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         /** HTTP 403 (DownloadMission.ERROR_HTTP_FORBIDDEN is package-private). */
         private const val HTTP_FORBIDDEN = 403
 
+        /** Minimum interval between progress persists (state changes persist at once). */
+        private const val PROGRESS_PERSIST_INTERVAL_MS = 10_000L
+
         private const val TAG = "PlaylistBatch"
     }
 
@@ -188,6 +198,29 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     private val liveMissions = mutableMapOf<String, DownloadMission>()
     private val speedSamples = mutableMapOf<String, Pair<Long, Long>>()
 
+    /** Batches currently being checked for new videos (double-tap guard). */
+    private val refreshInFlight = mutableSetOf<String>()
+
+    private var lastProgressPersistAt = 0L
+    private var progressPersistPending = false
+
+    init {
+        appContext.registerComponentCallbacks(
+            object : ComponentCallbacks2 {
+                override fun onConfigurationChanged(newConfig: Configuration) = Unit
+
+                @Suppress("OVERRIDE_DEPRECATION")
+                override fun onLowMemory() = Unit
+
+                override fun onTrimMemory(level: Int) {
+                    if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+                        flushProgressPersist()
+                    }
+                }
+            }
+        )
+    }
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             binder = service as? DownloadManagerService.DownloadManagerBinder
@@ -203,6 +236,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         override fun onServiceDisconnected(name: ComponentName?) {
             bound = false
             binder = null
+            flushProgressPersist()
         }
     }
 
@@ -847,6 +881,175 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         return done.size
     }
 
+    /** One refresh result: mapped items plus paging stats for the result log line. */
+    private data class RefreshPage(
+        val items: List<PlaylistBatchItem>,
+        val pages: Int
+    )
+
+    /**
+     * Re-fetches the batch's playlist (stored url + service id, first page and all
+     * following pages) and merges unknown videos via [mergeMissing]. A DONE batch is
+     * reactivated like [retryFailed] (QUEUED, or ACTIVE immediately if nothing runs)
+     * so newcomers actually download. Nothing is mutated when the fetch fails: no
+     * partial merges, state unchanged. One refresh per batch at a time.
+     *
+     * @param batchId the batch to check, in any state
+     */
+    fun checkForNewVideos(batchId: String) {
+        ensureLoaded()
+        if (!refreshInFlight.add(batchId)) {
+            Log.d(TAG, "check new: batch=$batchId already running")
+            return
+        }
+        val batch = batchById(batchId)
+        if (batch == null) {
+            refreshInFlight.remove(batchId)
+            Log.d(TAG, "check new: unknown batch $batchId")
+            return
+        }
+        val before = batch.queueState
+        Log.d(TAG, "check new: batch=$batchId key=${batch.playlistKey} state=$before")
+        val d = ExtractorHelper.getPlaylistInfo(batch.serviceId, batch.playlistUrl, true)
+            .subscribeOn(Schedulers.io())
+            .flatMap { info -> fetchRefreshPages(batch.serviceId, batch.playlistUrl, info) }
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe(
+                { page -> onRefreshFetched(batchId, page, before) },
+                { e -> onRefreshFailed(batchId, e) }
+            )
+        disposables.add(d)
+    }
+
+    private fun fetchRefreshPages(
+        serviceId: Int,
+        url: String,
+        first: PlaylistInfo
+    ): Single<RefreshPage> {
+        val items = mapRefreshItems(first.relatedItems, 0).toMutableList()
+        return fetchRefreshNext(serviceId, url, items, 1, first.nextPage)
+    }
+
+    private fun fetchRefreshNext(
+        serviceId: Int,
+        url: String,
+        items: MutableList<PlaylistBatchItem>,
+        pages: Int,
+        next: Page?
+    ): Single<RefreshPage> {
+        if (next == null || !Page.isValid(next)) {
+            return Single.just(RefreshPage(items.toList(), pages))
+        }
+        return ExtractorHelper.getMorePlaylistItems(serviceId, url, next)
+            .flatMap { result ->
+                items += mapRefreshItems(result.items, items.size)
+                if (result.hasNextPage() && Page.isValid(result.nextPage)) {
+                    fetchRefreshNext(serviceId, url, items, pages + 1, result.nextPage)
+                } else {
+                    Single.just(RefreshPage(items.toList(), pages + 1))
+                }
+            }
+    }
+
+    /**
+     * Maps raw playlist entries like the intake screen (same availability rule).
+     *
+     * @param raw the raw stream items of one page, or null
+     * @param offset positions already assigned, for serial numbering
+     * @return the mapped items in playlist order
+     */
+    private fun mapRefreshItems(
+        raw: List<StreamInfoItem>?,
+        offset: Int
+    ): List<PlaylistBatchItem> {
+        if (raw.isNullOrEmpty()) {
+            return emptyList()
+        }
+        val items = mutableListOf<PlaylistBatchItem>()
+        for (entry in raw) {
+            val url = entry.url
+            val name = entry.name
+            if (url.isNullOrBlank() || name.isNullOrBlank()) {
+                continue
+            }
+            items.add(
+                PlaylistBatchItem(
+                    serviceId = entry.serviceId,
+                    url = url,
+                    title = name.orEmpty(),
+                    durationSecs = maxOf(entry.duration, 0L),
+                    uploaderName = entry.uploaderName,
+                    thumbnails = entry.thumbnails,
+                    streamType = entry.streamType,
+                    position = offset + items.size + 1,
+                    selected = true,
+                    uploadDateText = entry.textualUploadDate
+                )
+            )
+        }
+        return items
+    }
+
+    private fun onRefreshFetched(
+        batchId: String,
+        page: RefreshPage,
+        before: BatchQueueState
+    ) {
+        refreshInFlight.remove(batchId)
+        val current = batchById(batchId) ?: return
+        if (current.queueState == BatchQueueState.DONE) {
+            val preview = mergeInto(current, page.items, emptyMap())
+            if (preview.first == 0) {
+                reportRefreshResult(batchId, page, 0, before, current.queueState)
+                return
+            }
+            val requeued = current.copy(
+                status = BatchStatus.RUNNING,
+                queueState = BatchQueueState.QUEUED
+            )
+            otherBatches = otherBatches.map { if (it.id == batchId) requeued else it }
+            persist()
+            if (record == null) {
+                activateNextBatch()
+            }
+        }
+        val merged = mergeMissing(batchId, page.items, emptyMap())
+        val after = batchById(batchId)?.queueState
+        reportRefreshResult(batchId, page, merged, before, after)
+        if (merged > 0) {
+            postMessage(appContext.getString(R.string.playlist_batch_new_videos, merged))
+        } else {
+            postMessage(appContext.getString(R.string.playlist_batch_nothing_new))
+        }
+    }
+
+    private fun reportRefreshResult(
+        batchId: String,
+        page: RefreshPage,
+        merged: Int,
+        before: BatchQueueState?,
+        after: BatchQueueState?
+    ) {
+        Log.d(
+            TAG,
+            "check new: batch=$batchId pages=${page.pages} " +
+                "fetched=${page.items.size} new=$merged state=$before->$after"
+        )
+    }
+
+    private fun onRefreshFailed(batchId: String, error: Throwable) {
+        refreshInFlight.remove(batchId)
+        Log.e(TAG, "check new failed: batch=$batchId", error)
+        val detail = error.message
+        postMessage(
+            if (detail.isNullOrBlank()) {
+                appContext.getString(R.string.playlist_batch_error_unknown)
+            } else {
+                appContext.getString(R.string.playlist_batch_error_unknown) + "\n" + detail
+            }
+        )
+    }
+
     /**
      * Moves a QUEUED batch up ([delta] negative) or down ([delta] positive) within the
      * queued section. DONE batches and the ACTIVE batch never move.
@@ -913,8 +1116,14 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         if (storeLoaded) {
             return
         }
+        val stored: BatchQueueFile
+        try {
+            stored = BatchStore.loadQueue(appContext)
+        } catch (e: BatchStore.StoreUnreadableException) {
+            Log.e(TAG, "ensureLoaded: store unreadable, will retry on next call", e)
+            return
+        }
         storeLoaded = true
-        val stored = BatchStore.loadQueue(appContext)
         folderNames = stored.folderNames.toMutableMap()
         val loaded = stored.batches
         Log.d(TAG, "ensureLoaded: loaded ${loaded.size} batches from store")
@@ -1014,6 +1223,34 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             Log.e(TAG, "persist failed", e)
         }
         publish()
+    }
+
+    /**
+     * Persists throttled progress updates: memory and UI update at once, disk write
+     * at most every 10 seconds. State changes keep using [persist] immediately, so
+     * a kill loses at most ~10 seconds of displayed progress (missions resume by
+     * downloaded bytes, never from scratch).
+     */
+    private fun persistProgressThrottled() {
+        val now = System.currentTimeMillis()
+        if (now - lastProgressPersistAt >= PROGRESS_PERSIST_INTERVAL_MS) {
+            lastProgressPersistAt = now
+            progressPersistPending = false
+            persist()
+        } else {
+            progressPersistPending = true
+            publish()
+        }
+    }
+
+    /** Writes a pending throttled progress persist (app background, service stop). */
+    private fun flushProgressPersist() {
+        if (!progressPersistPending) {
+            return
+        }
+        progressPersistPending = false
+        lastProgressPersistAt = System.currentTimeMillis()
+        persist()
     }
 
     // ---------------- loop ----------------
@@ -1901,7 +2138,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
         if (changed) {
             record = current.copy(items = items)
-            persist()
+            persistProgressThrottled()
         } else {
             publish()
         }

@@ -4,6 +4,9 @@
         android:id="@+id/batch_row_retry_failed"
         android:title="@string/playlist_batch_retry_failed" />
     <item
+        android:id="@+id/batch_row_check_new"
+        android:title="@string/playlist_batch_check_new_videos" />
+    <item
         android:id="@+id/batch_row_move_up"
         android:title="@string/playlist_batch_move_up" />
     <item

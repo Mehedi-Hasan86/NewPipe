@@ -89,6 +89,7 @@ class PlaylistBatchQueueFragment : Fragment() {
         batchAdapter = PlaylistBatchListAdapter(
             onSelect = { batchId -> selectBatch(batchId) },
             onRetryFailed = { batchId -> retryFailedWithToast(batchId) },
+            onCheckNew = { batchId -> manager.checkForNewVideos(batchId) },
             onMoveQueued = { batchId, delta -> manager.moveQueuedBatch(batchId, delta) },
             onDeleteBatch = { batchId, isActive -> confirmDeleteBatch(batchId, isActive) }
         )

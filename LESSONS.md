@@ -27,6 +27,10 @@ reason instead. A rule confirmed 3 times gets promoted into `AGENTS.md`.
 - 2026-10-11 | Tested the same-title folder hypothesis with two
   different-titled playlists | the collision path could never trigger | design
   each test so it can actually trigger the hypothesis, or mark it unverified.
+- 2026-10-11 | Kill-recovery left the item "Downloading" forever | reconcile treats
+  a Giga-enqueued mission as DOWNLOADING but nothing resumes it; the restored
+  service does not auto-start recovered missions | after re-attaching a mission,
+  verify it actually runs (bytes moving), and resume it explicitly if idle.
 - 2026-10-11 | Two NewPipe variants installed (short + branch-suffixed ids)
   logging the same tag | chased a "stale build" that was the other app's logs;
   pidof hid it, `ps -A` full names revealed it | map every logging pid to its
@@ -35,6 +39,17 @@ reason instead. A rule confirmed 3 times gets promoted into `AGENTS.md`.
   activity uses the app NoActionBar theme so menus have nowhere to render; the
   user tapped Delete twice instead of an invisible Clear finished | verify menu
   UI actually renders on device before relying on it in tests.
+- 2026-10-11 | Fast "up-to-date" Gradle build after real source edits | nearly
+  shipped a stale APK for verification (caught via APK timestamp + missing log
+  lines on device) | after every build, confirm compile ran and the APK is
+  fresh before installing.
+- 2026-10-11 | Chased a log paradox for hours with pattern-filtered greps | the
+  decisive lines (an early Clear-finished, full pid context) sat unread in the
+  file while theories multiplied | read the full unfiltered window first, grep
+  second; verify which app (pid to package) logged each line.
+- 2026-10-11 | Assumed one app on device during a debugging session | a second
+  variant logged the same tag with different code, poisoning every conclusion |
+  map pid to package before attributing any log line, every round.
 
 ## Obsolete
 

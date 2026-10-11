@@ -102,3 +102,14 @@ verified-vs-unverified tests, limitations, and the release checklist.
   `AGENTS.md` sections 3–6 and report the promotion.
 - Never delete lessons; mark them "obsolete" with a reason instead.
 - Keep each lesson to 1–3 lines. Do not invent lessons.
+
+## 10. Current state (handoff)
+
+- Branch `feature/playlist-batch-download`, in sync with `myfork/...` at `4a395d1f3`; store-safety work NOT committed.
+- Uncommitted: BatchDownloadManager.kt, BatchStore.kt, PlaylistBatchListAdapter.kt, PlaylistBatchQueueFragment.kt, menu_playlist_batch_row.xml, strings.xml, settings.gradle.kts, LESSONS.md, ?? batch-changes.patch.
+- Installed: debug APK built 11:06 (uncommitted quarantine + persist throttle).
+- Device store OVERWRITTEN with `GARBAGE-NOT-JSON-{[` (cat-verified); backup at `E:\work\logs\store_backup_good.json`; app force-stopped.
+- Done: stall reproduced (44.2% queued, 0/2, 12min); cause proven by code (idle-enqueued marked DOWNLOADING, never resumed).
+- Pending: open Queue, expect `loadQueue failed` + `.corrupt-<ts>` file, then restore backup.
+- Bugs: (a) kill-recovery stall — proven; (b) corrupt-store handling — hypothesis until log seen.
+- Next: user opens Batch Queue once; I dump logcat, verify quarantine, restore backup.

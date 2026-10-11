@@ -8,6 +8,7 @@ package org.schabi.newpipe.download.playlist
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.io.IOException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -110,9 +111,18 @@ object BatchStore {
     private const val LEGACY_FILE_NAME = "current_batch.json"
 
     private val json = Json {
-        prettyPrint = true
+        prettyPrint = false
         ignoreUnknownKeys = true
+        coerceInputValues = true
     }
+
+    /**
+     * The store file exists but cannot be read (I/O failure). Unlike corrupt content
+     * (quarantined below), callers must NOT treat this as empty: leave the loaded
+     * flag alone so the next call retries.
+     */
+    class StoreUnreadableException(message: String, cause: Throwable?) :
+        IOException(message, cause)
 
     private fun storeDir(context: Context): File {
         val dir = File(context.filesDir, DIR_NAME)
@@ -131,27 +141,21 @@ object BatchStore {
      *
      * @param context the Android context
      * @return the persisted queue file (empty when nothing exists or it is corrupt)
+     * @throws StoreUnreadableException when the file exists but cannot be read
      */
     fun loadQueue(context: Context): BatchQueueFile {
         val dir = storeDir(context)
         val file = File(dir, FILE_NAME)
         if (file.exists()) {
-            return try {
-                val stored = json.decodeFromString(
-                    BatchQueueFile.serializer(),
-                    file.readText()
-                )
-                stored.copy(batches = stored.batches.map { it.withDerivedKey() })
-            } catch (e: Exception) {
-                BatchQueueFile()
-            }
+            return loadV2(file)
         }
         val legacy = File(dir, LEGACY_FILE_NAME)
         if (!legacy.exists()) {
             return BatchQueueFile()
         }
+        val text = readFileText(legacy)
         return try {
-            val single = json.decodeFromString(BatchRecord.serializer(), legacy.readText())
+            val single = json.decodeFromString(BatchRecord.serializer(), text)
             val queueState = if (single.status == BatchStatus.COMPLETED ||
                 single.status == BatchStatus.CANCELLED
             ) {
@@ -162,7 +166,67 @@ object BatchStore {
             val migrated = single.copy(queueState = queueState).withDerivedKey()
             BatchQueueFile(batches = listOf(migrated))
         } catch (e: Exception) {
+            Log.e(TAG, "loadQueue failed: path=${legacy.absolutePath} size=${legacy.length()}", e)
+            quarantine(legacy)
             BatchQueueFile()
+        }
+    }
+
+    /**
+     * Reads a store file or fails loudly (never silent, never empty-on-error).
+     *
+     * @param file the file to read
+     * @return its text content
+     * @throws StoreUnreadableException when reading fails
+     */
+    private fun readFileText(file: File): String {
+        return try {
+            file.readText()
+        } catch (e: Exception) {
+            Log.e(TAG, "loadQueue failed: cannot read path=${file.absolutePath}", e)
+            throw StoreUnreadableException("Cannot read ${file.absolutePath}", e)
+        }
+    }
+
+    /**
+     * Parses a version 2 queue file, quarantining it on parse failure.
+     *
+     * @param file the file to parse (already read successfully)
+     * @return the parsed queue, or empty when corrupt (after quarantining)
+     * @throws StoreUnreadableException when the file cannot be read
+     */
+    private fun loadV2(file: File): BatchQueueFile {
+        val text = readFileText(file)
+        return try {
+            val stored = json.decodeFromString(
+                BatchQueueFile.serializer(),
+                text
+            )
+            stored.copy(batches = stored.batches.map { it.withDerivedKey() })
+        } catch (e: Exception) {
+            Log.e(TAG, "loadQueue failed: path=${file.absolutePath} size=${file.length()}", e)
+            quarantine(file)
+            BatchQueueFile()
+        }
+    }
+
+    /**
+     * Moves an unreadable store file aside as evidence (kept, never deleted).
+     *
+     * @param file the corrupt file to quarantine
+     */
+    private fun quarantine(file: File) {
+        val target = file.resolveSibling("${file.name}.corrupt-${System.currentTimeMillis()}")
+        val moved = try {
+            file.renameTo(target)
+        } catch (e: Exception) {
+            Log.e(TAG, "quarantine failed: path=${file.absolutePath}", e)
+            false
+        }
+        if (moved) {
+            Log.d(TAG, "quarantined ${file.absolutePath} -> ${target.absolutePath}")
+        } else {
+            Log.e(TAG, "quarantine failed: could not move ${file.absolutePath}")
         }
     }
 
