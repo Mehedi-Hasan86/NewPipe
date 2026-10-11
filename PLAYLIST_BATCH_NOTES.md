@@ -129,6 +129,14 @@ Verified:
 - Duplicate playlist merge (add-missing-only) and re-download SKIP default.
 - Kill-and-resume (force-stop mid-download → in-flight mission re-attached as
   DOWNLOADING, pending items resume, no duplicate files, 3/3 green).
+- Kill-recovery resume: `reconcileAfterRestart` resumes idle enqueued missions
+  (`manager.resumeMission()`), no Play press needed; 30 s poll safety net as
+  backstop (not triggered in tests).
+- Corrupt store quarantine: garbage JSON file → `Log.e` "loadQueue failed" with
+  full stack trace, `.corrupt-<ts>` file created, empty queue loaded, backup
+  restore verified.
+- Progress persist throttled to 10 s (per-write byte-count logged, state changes
+  persist immediately).
 - Move up/down, delete ACTIVE batch (missions stop, files kept, queue advances).
 - Retry-failed machinery (DONE → QUEUED → ACTIVE → run).
 - Auto-recovery after network loss (airplane-mode failures retried to 3/3 green).
@@ -139,6 +147,8 @@ Verified:
 - Clear finished with content (DONE rows removed in one action).
 - Queue screen toolbar (Add batch, Clear finished) renders (own Toolbar, since
   the app theme has no action bar).
+- Check for new videos: 5 new videos merged, batch reactivated (DONE → QUEUED →
+  ACTIVE); nothing-new path returns no merge.
 
 NOT verified:
 
@@ -147,9 +157,11 @@ NOT verified:
 - Same-title folder `"Name (2)"` (code reading only; needs two distinct
   same-titled playlists).
 - Low-storage handling (warning path never triggered).
-- Not applicable: NewPipe download notifications have no Pause/Cancel actions
-  (content intent only).
 - Battery optimization / Doze.
+- Progress loss after kill is within ~10 s (not measured on device).
+
+Not applicable: NewPipe download notifications have no Pause/Cancel actions
+(content intent only).
 
 ## 5. Known limitations
 
