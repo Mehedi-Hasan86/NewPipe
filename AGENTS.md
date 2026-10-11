@@ -105,11 +105,11 @@ verified-vs-unverified tests, limitations, and the release checklist.
 
 ## 10. Current state (handoff)
 
-- Branch `feature/playlist-batch-download`, in sync with `myfork/...` at `4a395d1f3`; store-safety work NOT committed.
+- Branch `feature/playlist-batch-download`, in sync with `myfork/...` at `4a395d1f3`; store-safety + stall-fix work NOT committed.
 - Uncommitted: BatchDownloadManager.kt, BatchStore.kt, PlaylistBatchListAdapter.kt, PlaylistBatchQueueFragment.kt, menu_playlist_batch_row.xml, strings.xml, settings.gradle.kts, LESSONS.md, ?? batch-changes.patch.
-- Installed: debug APK built 11:06 (uncommitted quarantine + persist throttle).
-- Device store OVERWRITTEN with `GARBAGE-NOT-JSON-{[` (cat-verified); backup at `E:\work\logs\store_backup_good.json`; app force-stopped.
-- Done: stall reproduced (44.2% queued, 0/2, 12min); cause proven by code (idle-enqueued marked DOWNLOADING, never resumed).
-- Pending: open Queue, expect `loadQueue failed` + `.corrupt-<ts>` file, then restore backup.
-- Bugs: (a) kill-recovery stall — proven; (b) corrupt-store handling — hypothesis until log seen.
-- Next: user opens Batch Queue once; I dump logcat, verify quarantine, restore backup.
+- Installed: debug APK built 13:32 (JDK 21, reconcile resume + poll safety net + quarantine + persist throttle).
+- Device store: batch 7d477949 DONE (2 COMPLETED), verified by run-as cat.
+- Done: stall FIXED — reconcileAfterRestart calls resumeMission for idle/enqueued; kill-recovery test passed (auto-resume, item 2 follows, batch DONE).
+- Done: corruption test PASSED — Log.e "loadQueue failed" + full stack trace, `.corrupt-<ts>` quarantined, empty queue loaded, backup restored.
+- Bugs: (a) kill-recovery stall — FIXED (proven by log); (b) corrupt-store handling — FIXED (proven by log).
+- Next: no pending tests; feature ready for release checklist per PLAYLIST_BATCH_NOTES.md section 6.

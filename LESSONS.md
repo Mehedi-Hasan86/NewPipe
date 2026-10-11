@@ -50,6 +50,8 @@ reason instead. A rule confirmed 3 times gets promoted into `AGENTS.md`.
 - 2026-10-11 | Assumed one app on device during a debugging session | a second
   variant logged the same tag with different code, poisoning every conclusion |
   map pid to package before attributing any log line, every round.
+- 2026-10-11 | Fixed kill-recovery stall by splitting reconcile: idle-enqueued missions now call manager.resumeMission() in reconcileAfterRestart; 30s poll safety net as backstop | log proves immediate resume + bytes moving + batch DONE without Play press | always resume explicitly in reconcile, not just mark status; add a poll safety net for edge cases.
+- 2026-10-11 | Corrupt store test: pushed garbage JSON, force-stop, opened queue | BatchStore.loadV2 logs Log.e with full stack trace, quarantines file as .corrupt-<ts>, loads empty queue, persists empty store; backup restore verified | corrupt-store handling is proven; the quarantine + empty-queue fallback works as designed.
 
 ## Obsolete
 

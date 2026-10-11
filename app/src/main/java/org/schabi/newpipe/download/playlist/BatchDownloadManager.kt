@@ -141,6 +141,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         /** Minimum interval between progress persists (state changes persist at once). */
         private const val PROGRESS_PERSIST_INTERVAL_MS = 10_000L
 
+        /** Idle time before the poll loop resumes a stuck DOWNLOADING mission once. */
+        private const val IDLE_RESUME_AFTER_MS = 30_000L
+
         private const val TAG = "PlaylistBatch"
     }
 
@@ -203,6 +206,9 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private var lastProgressPersistAt = 0L
     private var progressPersistPending = false
+
+    /** First-seen wall time per batch-scoped item key stuck idle while DOWNLOADING. */
+    private val idleSince = mutableMapOf<String, Long>()
 
     init {
         appContext.registerComponentCallbacks(
@@ -2124,6 +2130,26 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                 return@map item
             }
             val mission = findLiveMission(item.url, current.id) ?: return@map item
+            if (item.status == BatchItemStatus.DOWNLOADING && !mission.running &&
+                mission.enqueued && current.status != BatchStatus.PAUSED
+            ) {
+                val idleKey = missionMapKey(current.id, item.url)
+                val now = System.currentTimeMillis()
+                val since = idleSince[idleKey]
+                if (since == null) {
+                    idleSince[idleKey] = now
+                } else if (now - since >= IDLE_RESUME_AFTER_MS) {
+                    idleSince.remove(idleKey)
+                    try {
+                        manager()?.resumeMission(mission)
+                        Log.d(TAG, "pollActiveMissions: resumed idle mission item=${item.url} idleMs=${now - since}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "pollActiveMissions: resume failed item=${item.url}", e)
+                    }
+                }
+            } else {
+                idleSince.remove(missionMapKey(current.id, item.url))
+            }
             val length = mission.getLength().coerceAtLeast(0L)
             val done = mission.done.coerceAtLeast(0L)
             val fraction = if (length > 0) (done.toDouble() / length).coerceIn(0.0, 1.0) else 0.0
@@ -2199,13 +2225,31 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
                         item.copy(status = BatchItemStatus.COMPLETED, lastProgress = 1.0)
                     }
 
-                    mission.running || mission.enqueued -> {
-                        Log.d(TAG, "reconcileAfterRestart: mission running/enqueued for ${item.url}")
+                    mission.running -> {
+                        Log.d(TAG, "reconcileAfterRestart: mission running for ${item.url} running=true enqueued=${mission.enqueued} errCode=${mission.errCode}, keeping DOWNLOADING")
                         item.copy(status = BatchItemStatus.DOWNLOADING)
                     }
 
+                    mission.errCode != DownloadMission.ERROR_NOTHING -> {
+                        Log.d(TAG, "reconcileAfterRestart: mission errored for ${item.url} running=false enqueued=${mission.enqueued} errCode=${mission.errCode}, marking PENDING for retry")
+                        liveMissions.remove(missionMapKey(current.id, requireNotNull(storageUri)))
+                        item.copy(status = BatchItemStatus.PENDING, failureReason = null)
+                    }
+
+                    mission.enqueued -> {
+                        try {
+                            manager.resumeMission(mission)
+                            Log.d(TAG, "reconcileAfterRestart: resumed idle mission for ${item.url} running=false enqueued=true errCode=${mission.errCode}, keeping DOWNLOADING")
+                            item.copy(status = BatchItemStatus.DOWNLOADING)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "reconcileAfterRestart: resume failed for ${item.url}, marking PENDING", e)
+                            liveMissions.remove(missionMapKey(current.id, requireNotNull(storageUri)))
+                            item.copy(status = BatchItemStatus.PENDING, failureReason = null)
+                        }
+                    }
+
                     else -> {
-                        Log.d(TAG, "reconcileAfterRestart: mission not running for ${item.url}, marking PENDING")
+                        Log.d(TAG, "reconcileAfterRestart: mission idle for ${item.url} running=false enqueued=false errCode=${mission.errCode}, marking PENDING")
                         item.copy(status = BatchItemStatus.PENDING, failureReason = null)
                     }
                 }
