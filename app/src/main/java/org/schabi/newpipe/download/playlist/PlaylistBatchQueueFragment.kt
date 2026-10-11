@@ -17,6 +17,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.MenuProvider
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -206,27 +207,35 @@ class PlaylistBatchQueueFragment : Fragment() {
             }
         }
         refreshItemActions()
+        requireActivity().invalidateMenu()
     }
 
     private fun selectBatch(batchId: String) {
         val live = manager.uiState.value
-        val known = (live != null && live.batchId == batchId) ||
-            manager.itemsSnapshot(batchId) != null
+        val snapshot = manager.itemsSnapshot(batchId)
+        val known = (live != null && live.batchId == batchId) || snapshot != null
         if (!known) {
             return
         }
         selectedBatchId = batchId
         showItems()
+        val name = manager.batchList.value
+            ?.firstOrNull { it.batchId == batchId }?.playlistName
+            .takeUnless { it.isNullOrBlank() }
+            ?: getString(R.string.playlist_batch_queue_title)
+        (requireActivity() as? AppCompatActivity)?.supportActionBar?.setTitle(name)
         if (live != null && live.batchId == batchId) {
             render(live)
-        } else {
-            manager.itemsSnapshot(batchId)?.let { render(it) }
+        } else if (snapshot != null) {
+            render(snapshot)
         }
     }
 
     private fun showList() {
         binding.batchListView.visibility = View.VISIBLE
         binding.batchItemView.visibility = View.GONE
+        (requireActivity() as? AppCompatActivity)?.supportActionBar
+            ?.setTitle(R.string.playlist_batch_queue_title)
     }
 
     private fun showItems() {

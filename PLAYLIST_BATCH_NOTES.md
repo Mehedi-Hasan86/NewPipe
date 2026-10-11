@@ -133,18 +133,21 @@ Verified:
 - Retry-failed machinery (DONE → QUEUED → ACTIVE → run).
 - Auto-recovery after network loss (airplane-mode failures retried to 3/3 green).
 - Persist works (per-write path/byte-count/rename/mtime logging; 7-batch store).
+- Delete QUEUED batch (row dropped, no DONE entry, active batch unaffected).
+- Clear finished with content (DONE rows removed in one action).
+- Queue screen toolbar (Add batch, Clear finished) renders (own Toolbar, since
+  the app theme has no action bar).
 
 NOT verified:
 
-- Delete QUEUED batch (only ACTIVE/DONE deletes exercised on device).
-- Clear finished with content (tapped only when empty).
 - Manual retry tap on a failed item (nothing reachable ever FAILED on playable
   content; only auto-recovery observed).
 - Same-title folder `"Name (2)"` (code reading only; needs two distinct
   same-titled playlists).
 - Audio-language correctness on a dubbed playlist.
 - Low-storage handling (warning path never triggered).
-- Notification Pause/Cancel behavior for batches.
+- Not applicable: NewPipe download notifications have no Pause/Cancel actions
+  (content intent only).
 - Battery optimization / Doze.
 
 ## 5. Known limitations

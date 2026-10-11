@@ -8,17 +8,23 @@ package org.schabi.newpipe.download.playlist
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import org.schabi.newpipe.R
+import org.schabi.newpipe.databinding.ActivityPlaylistBatchQueueBinding
 import org.schabi.newpipe.util.ThemeHelper
 
 /**
  * Host for [PlaylistBatchQueueFragment]. Opened via [NavigationHelper.openPlaylistBatchQueue].
+ *
+ * Uses its own Toolbar like DownloadActivity: the app theme has no action bar,
+ * so without this the fragment's toolbar menu would have nowhere to render.
  */
 class PlaylistBatchQueueActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         ThemeHelper.setTheme(this)
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_playlist_batch_queue)
+        val binding = ActivityPlaylistBatchQueueBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        setSupportActionBar(binding.toolbarLayout.toolbar)
 
         supportActionBar?.apply {
             setDisplayHomeAsUpEnabled(true)
