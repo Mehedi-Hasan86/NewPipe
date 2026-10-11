@@ -1160,28 +1160,56 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         } else {
             PlaylistAudioContainer.OPUS
         }
+        val effectivePreferred =
+            override?.audioTrackLanguage ?: options.preferredAudioLanguage
         val audioChoice = PlaylistBatchResolver.resolveAudio(
             appContext,
             info,
             audioContainer,
             options.preferHighestBitrate,
-            override?.audioTrackLanguage ?: options.preferredAudioLanguage,
+            effectivePreferred,
             override?.audioTrackId
         )
         val secondary = when (audioChoice) {
             is PlaylistBatchResolver.AudioResolution.Chosen -> audioChoice.stream
 
-            is PlaylistBatchResolver.AudioResolution.MissingLanguage ->
+            is PlaylistBatchResolver.AudioResolution.MissingLanguage -> {
+                logAudioPick(
+                    item,
+                    effectivePreferred,
+                    audioChoice.available,
+                    null,
+                    missingLanguageReason(options.missingLanguageAction)
+                )
                 throw LanguageMissing(audioChoice.available.map { it.displayName })
+            }
 
             is PlaylistBatchResolver.AudioResolution.NoAudio -> null
         }
         val main = resolvedVideo.main
         val muxAudio = if (main.isVideoOnly) {
             secondary ?: resolvedVideo.secondaryAudio
-                ?: throw ResolveFailed(appContext.getString(R.string.playlist_batch_fail_no_audio))
         } else {
             null
+        }
+        if (main.isVideoOnly) {
+            if (muxAudio == null) {
+                logAudioPick(
+                    item,
+                    effectivePreferred,
+                    PlaylistBatchResolver.audioTrackChoices(appContext, info),
+                    null,
+                    "no-tracks"
+                )
+                throw ResolveFailed(appContext.getString(R.string.playlist_batch_fail_no_audio))
+            }
+            logAudioPick(
+                item,
+                effectivePreferred,
+                PlaylistBatchResolver.audioTrackChoices(appContext, info),
+                muxAudio,
+                pickReasonChosen(muxAudio, effectivePreferred, override?.audioTrackId)
+            )
         }
         val urls: Array<String>
         val recovery: ArrayList<MissionRecoveryInfo>
@@ -1223,23 +1251,48 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         } else {
             PlaylistAudioContainer.OPUS
         }
+        val effectivePreferred =
+            override?.audioTrackLanguage ?: options.preferredAudioLanguage
         val audioChoice = PlaylistBatchResolver.resolveAudio(
             appContext,
             info,
             audioContainer,
             options.preferHighestBitrate,
-            override?.audioTrackLanguage ?: options.preferredAudioLanguage,
+            effectivePreferred,
             override?.audioTrackId
         )
         val stream = when (audioChoice) {
             is PlaylistBatchResolver.AudioResolution.Chosen -> audioChoice.stream
 
-            is PlaylistBatchResolver.AudioResolution.MissingLanguage ->
+            is PlaylistBatchResolver.AudioResolution.MissingLanguage -> {
+                logAudioPick(
+                    item,
+                    effectivePreferred,
+                    audioChoice.available,
+                    null,
+                    missingLanguageReason(options.missingLanguageAction)
+                )
                 throw LanguageMissing(audioChoice.available.map { it.displayName })
+            }
 
-            is PlaylistBatchResolver.AudioResolution.NoAudio ->
+            is PlaylistBatchResolver.AudioResolution.NoAudio -> {
+                logAudioPick(
+                    item,
+                    effectivePreferred,
+                    PlaylistBatchResolver.audioTrackChoices(appContext, info),
+                    null,
+                    "no-tracks"
+                )
                 throw ResolveFailed(appContext.getString(R.string.playlist_batch_fail_no_audio))
+            }
         }
+        logAudioPick(
+            item,
+            effectivePreferred,
+            PlaylistBatchResolver.audioTrackChoices(appContext, info),
+            stream,
+            pickReasonChosen(stream, effectivePreferred, override?.audioTrackId)
+        )
         val lang = languageOf(override, options, stream)
         val filename = PlaylistBatchResolver.buildFileName(
             appContext,
@@ -1256,6 +1309,71 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             PlaylistBatchResolver.audioPostprocessing(stream), null,
             arrayListOf(MissionRecoveryInfo(stream)), filename, mime
         )
+    }
+
+    /**
+     * One log line per video at audio-choice time; diagnostics only, no behavior change.
+     *
+     * @param item the batch item being resolved
+     * @param preferred the effective preferred language passed to resolveAudio
+     * @param available the track groups on the video
+     * @param chosen the picked stream, or null when none was picked
+     * @param reason why this outcome happened (see pick/missing reason helpers)
+     */
+    private fun logAudioPick(
+        item: BatchItemRecord,
+        preferred: String,
+        available: List<PlaylistBatchResolver.AudioTrackChoice>,
+        chosen: org.schabi.newpipe.extractor.stream.AudioStream?,
+        reason: String
+    ) {
+        val avail = available.joinToString(
+            ", "
+        ) {
+            "${it.languageCode ?: "?"}(${it.trackType ?: "?"})"
+        }
+        val chosenText =
+            "${chosen?.audioLocale?.language ?: "none"}(${chosen?.audioTrackType?.name ?: "none"})"
+        Log.d(
+            TAG,
+            "audio pick: batch=${record?.id} item=${item.url} " +
+                "preferred=${preferred.ifBlank { "none" }} available=[$avail] " +
+                "chosen=$chosenText trackId=${chosen?.audioTrackId ?: "none"} " +
+                "bitrate=${chosen?.averageBitrate ?: -1} reason=$reason"
+        )
+    }
+
+    /**
+     * Log reason for a chosen stream: an explicit track-id hit or a locale match
+     * counts as preferred-match; original/default/single-group picks count as
+     * original-fallback.
+     */
+    private fun pickReasonChosen(
+        stream: org.schabi.newpipe.extractor.stream.AudioStream,
+        preferred: String,
+        overrideTrackId: String?
+    ): String {
+        if (overrideTrackId != null && stream.audioTrackId == overrideTrackId) {
+            return "preferred-match"
+        }
+        return if ((stream.audioLocale?.language ?: "").equals(preferred, ignoreCase = true)) {
+            "preferred-match"
+        } else {
+            "original-fallback"
+        }
+    }
+
+    /**
+     * Log reason for a missing language under the configured fallback action
+     * (USE_ORIGINAL requeues with Original and logs again, so it counts as
+     * original-fallback here too).
+     */
+    private fun missingLanguageReason(action: MissingLanguageAction): String {
+        return when (action) {
+            MissingLanguageAction.SKIP_ITEM -> "skipped"
+            MissingLanguageAction.ASK_AT_END -> "ask-at-end"
+            MissingLanguageAction.USE_ORIGINAL -> "original-fallback"
+        }
     }
 
     private fun languageOf(

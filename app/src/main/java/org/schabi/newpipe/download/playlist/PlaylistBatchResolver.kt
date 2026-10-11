@@ -36,7 +36,9 @@ object PlaylistBatchResolver {
         val trackId: String?,
         val displayName: String,
         /** ISO 639-1 code, e.g. "hi", or null when unknown. */
-        val languageCode: String?
+        val languageCode: String?,
+        /** Track type name (ORIGINAL/DUBBED/…), or null when unknown. */
+        val trackType: String? = null
     )
 
     /** One subtitle option, as shown in the per-item UI. */
@@ -78,7 +80,8 @@ object PlaylistBatchResolver {
                 AudioTrackChoice(
                     trackId = null,
                     displayName = Localization.audioTrackName(context, grouped[0][0]),
-                    languageCode = grouped[0][0].audioLocale?.language
+                    languageCode = grouped[0][0].audioLocale?.language,
+                    trackType = grouped[0][0].audioTrackType?.name
                 )
             )
         }
@@ -87,7 +90,8 @@ object PlaylistBatchResolver {
             AudioTrackChoice(
                 trackId = first.audioTrackId,
                 displayName = Localization.audioTrackName(context, first),
-                languageCode = first.audioLocale?.language
+                languageCode = first.audioLocale?.language,
+                trackType = first.audioTrackType?.name
             )
         }
     }

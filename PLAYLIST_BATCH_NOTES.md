@@ -133,6 +133,8 @@ Verified:
 - Retry-failed machinery (DONE → QUEUED → ACTIVE → run).
 - Auto-recovery after network loss (airplane-mode failures retried to 3/3 green).
 - Persist works (per-write path/byte-count/rename/mtime logging; 7-batch store).
+- Audio-language correctness on a dubbed playlist (preferred=original and
+  preferred=hi verified; per-video "audio pick:" log line).
 - Delete QUEUED batch (row dropped, no DONE entry, active batch unaffected).
 - Clear finished with content (DONE rows removed in one action).
 - Queue screen toolbar (Add batch, Clear finished) renders (own Toolbar, since
@@ -144,7 +146,6 @@ NOT verified:
   content; only auto-recovery observed).
 - Same-title folder `"Name (2)"` (code reading only; needs two distinct
   same-titled playlists).
-- Audio-language correctness on a dubbed playlist.
 - Low-storage handling (warning path never triggered).
 - Not applicable: NewPipe download notifications have no Pause/Cancel actions
   (content intent only).
@@ -158,6 +159,9 @@ NOT verified:
   downloads break the same way.
 - One ACTIVE batch at a time (`parallelVideos` 1–3 applies within it).
 - DONE batches accumulate in the JSON store until deleted/cleared (no auto-prune).
+- A single untagged audio track carries no locale info (logged as `?(?)` with
+  original-fallback).
+- The queue row does not show the chosen language (log only).
 
 ## 6. Before release checklist for maintainers
 
