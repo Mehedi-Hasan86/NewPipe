@@ -254,7 +254,7 @@ object BatchStore {
                 file.delete()
                 renamed = tmp.renameTo(file)
             }
-            Log.d(
+            Log.v(
                 TAG,
                 "persist: path=${file.absolutePath} bytes=${encoded.length} " +
                     "batches=${queue.batches.size} renamed=$renamed tmpExists=${tmp.exists()} " +

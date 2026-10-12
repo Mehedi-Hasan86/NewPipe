@@ -1263,14 +1263,14 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
     private fun pump() {
         val current = record ?: return
-        Log.d(TAG, "pump: status=${current.status}, activeCount=${activeCount()}, pendingCount=${current.items.count { it.status == BatchItemStatus.PENDING }}, parallel=${current.options.parallelVideos}")
+        Log.v(TAG, "pump: status=${current.status}, activeCount=${activeCount()}, pendingCount=${current.items.count { it.status == BatchItemStatus.PENDING }}, parallel=${current.options.parallelVideos}")
         if (!bound || manager() == null) {
-            Log.d(TAG, "pump: not bound or no manager, rebinding")
+            Log.v(TAG, "pump: not bound or no manager, rebinding")
             ensureBound { pump() }
             return
         }
         if (current.status == BatchStatus.PAUSED || isTerminal(current.status)) {
-            Log.d(TAG, "pump: batch paused or terminal, publishing")
+            Log.v(TAG, "pump: batch paused or terminal, publishing")
             publish()
             return
         }
@@ -1690,7 +1690,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             ?: throw IOException(appContext.getString(R.string.playlist_batch_service_bind_failed))
         val audioOnly = record?.options?.mode == PlaylistBatchMode.AUDIO_ONLY || kind == 's'
         val dir = targetDirectory(audioOnly, item)
-        Log.d(TAG, "launchMission: item=${item.url} dir=${dir.uri} name=$filename mime=$mime")
+        Log.v(TAG, "launchMission: item=${item.url} dir=${dir.uri} name=$filename mime=$mime")
         val existingUri = try {
             dir.findFile(filename)
         } catch (e: Exception) {
@@ -1733,7 +1733,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
         val threads = PreferenceManager.getDefaultSharedPreferences(appContext)
             .getInt(appContext.getString(R.string.default_download_threads), 3)
-        Log.d(
+        Log.v(
             TAG,
             "launchMission: batch=${record?.id} kind=$kind file=${storage.uri} " +
                 "parent=${storage.parentUri} tag=${storage.tag} urls=${urls.size} " +
@@ -1778,7 +1778,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             dir.createFile(filename, mime)
         }
         if (created != null) {
-            Log.d(TAG, "createBatchFile: created ${created.uri} parent=${created.parentUri}")
+            Log.v(TAG, "createBatchFile: created ${created.uri} parent=${created.parentUri}")
             return created
         }
         val cause = dir.consumeCreateError()
@@ -1827,20 +1827,20 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
             throw FolderMissingException(key)
         }
         if (current == null || !current.options.usePlaylistSubfolder) {
-            Log.d(TAG, "targetDirectory: using root folder $path")
+            Log.v(TAG, "targetDirectory: using root folder $path")
             return main
         }
         // Stable per-playlist folder from the persisted map: the same playlistKey
         // always reuses its folder, title collisions get "Name (2)", ... instead of
         // title-only naming that mixed different playlists together.
         val folderName = folderNameFor(current, item.title)
-        Log.d(TAG, "targetDirectory: root=$path subfolder=$folderName key=${current.playlistKey}")
+        Log.v(TAG, "targetDirectory: root=$path subfolder=$folderName key=${current.playlistKey}")
         val sub = main.getSubfolder(
             appContext,
             folderName,
             if (audioOnly) DownloadManager.TAG_AUDIO else DownloadManager.TAG_VIDEO
         )
-        Log.d(TAG, "targetDirectory: dirUri=${sub.uri} tag=${sub.tag}")
+        Log.v(TAG, "targetDirectory: dirUri=${sub.uri} tag=${sub.tag}")
         return sub
     }
 
@@ -2076,7 +2076,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
 
             DownloadManagerService.MESSAGE_FINISHED -> {
                 if (mission.isFinished) {
-                    Log.d(TAG, "mission finished: batch=${current.id} url=${item.url} file=$storageUri")
+                    Log.v(TAG, "mission finished: batch=${current.id} url=${item.url} file=$storageUri")
                     setItemStatus(item.url, BatchItemStatus.COMPLETED, null)
                     liveMissions.remove(missionMapKey(current.id, storageUri))
                     pump()
