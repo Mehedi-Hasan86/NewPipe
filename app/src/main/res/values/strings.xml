@@ -640,6 +640,11 @@
     <string name="playlist_batch_retry_failed">Retry failed</string>
     <string name="playlist_batch_check_new_videos">Check for new videos</string>
     <string name="playlist_batch_new_videos">%1$d new videos</string>
+    <string name="playlist_batch_new_videos_title">New videos in "%1$s"</string>
+    <string name="playlist_batch_new_videos_count">%1$d of %2$d selected</string>
+    <string name="playlist_batch_new_videos_select_all">Select all</string>
+    <string name="playlist_batch_new_videos_select_none">Select none</string>
+    <string name="playlist_batch_new_videos_add">Add selected</string>
     <string name="playlist_batch_retry_failed_toast">%1$d failed videos re-queued</string>
     <string name="playlist_batch_delete_batch">Delete batch</string>
     <string name="playlist_batch_confirm_delete_batch">Delete this batch? Downloaded files are kept.</string>

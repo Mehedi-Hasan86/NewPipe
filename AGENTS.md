@@ -121,5 +121,13 @@ verified-vs-unverified tests, limitations, and the release checklist.
   timeout) — 6.5 s main-thread stall in Giga mission-recovery provider
   queries, batch code idle; aggravated by 100%-full disk. Investigated
   read-only; no fix yet. Traces file unreadable (system-only).
-- Next: free device space + Retry-failed on the 2 ENOSPC-failed items;
-  release checklist per PLAYLIST_BATCH_NOTES.md section 6.
+- New 2026-10-14: selectable "Check for new videos" (fetch → checkbox dialog
+  → `addNewVideos`, playlist-position numbering). Built 15:32 (JDK 21,
+  BUILD SUCCESSFUL, runCheckstyle + runKtlint executed). Installed.
+  Verified: dialog lists unselected, select-2 merge DONE->ACTIVE as files
+  4+5. Open tests: Cancel no-op, Select-all. Real bug fixed on the way:
+  requeue→activate→merge raced a synchronous pump (merged=0); merge into
+  QUEUED first, activate after.
+- Next: Cancel + Select-all device tests; free-space + Retry-failed on the 2
+  ENOSPC-failed items; release checklist per PLAYLIST_BATCH_NOTES.md
+  section 6.

@@ -58,6 +58,8 @@ reason instead. A rule confirmed 3 times gets promoted into `AGENTS.md`.
 - 2026-10-14 | Grepped logcat for `checkNew|check-for` and concluded no check ran on the batch | the real lines say `check new:`, found only after grepping the exact string | confirm exact log keywords in code before grepping, or read the full window first.
 - 2026-10-14 | 2 of 26 items failed late in a big batch, looked like app failures | device `/data` was 100% full (139M avail, 112 ENOSPC lines incl. persist writes) | check `df` free space when late-batch items fail; free space before big-batch tests.
 - 2026-10-14 | ANR traces file visible in `/data/anr` but `cat` denied (system-only) | main-thread stack unrecoverable without root | attribute ANRs from logcat timing (named main-thread calls + Choreographer/Davey) plus code thread audit instead.
+- 2026-10-14 | Every Gradle build died at settings-eval with kotlin-dsl `AbstractKotlinPluginWrapper` instrumentation failure; jars/distro/metadata all verified intact | a truncated 65MB instrumented-KGP jar in `caches/9.7.1/transforms` (no zip EOCD, written by the earlier build killed at wrapper timeout) was trusted as up-to-date | when the toolchain breaks with intact sources, sweep transform outputs for bad zips; never kill a build wrapper mid-run, it truncates cache writes.
+- 2026-10-14 | "Add selected" merged 0 with "Nothing new": requeue→activate→merge let a synchronous bound pump complete the empty batch before the merge | merge into QUEUED first, activate only after, revert to DONE when nothing merged | order state changes so work exists before the pump can observe the state.
 
 ## Obsolete
 

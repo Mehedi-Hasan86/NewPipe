@@ -93,6 +93,18 @@ data class AskLanguageRequest(
     val urls: List<String>
 )
 
+/**
+ * Videos found by "Check for new videos" that are not in the batch yet.
+ * The user picks which ones to add; positions are the playlist positions.
+ *
+ * @param batchId the batch that was checked
+ * @param items the unknown videos in playlist order
+ */
+data class NewVideosOffer(
+    val batchId: String,
+    val items: List<PlaylistBatchItem>
+)
+
 /** One row of the batch queue screen (batch list). */
 data class BatchSummary(
     val batchId: String,
@@ -168,6 +180,17 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     /** Fired once when ASK_AT_END items await a decision. */
     private val _askLanguageEvent = MutableLiveData<BatchEvent<AskLanguageRequest>>()
     val askLanguageEvent: LiveData<BatchEvent<AskLanguageRequest>> = _askLanguageEvent
+
+    /** Fired once when "Check for new videos" found videos to pick from. */
+    private val _newVideosEvent = MutableLiveData<BatchEvent<NewVideosOffer>>()
+    val newVideosEvent: LiveData<BatchEvent<NewVideosOffer>> = _newVideosEvent
+
+    /**
+     * The latest unchecked offer, kept in memory so the selection dialog
+     * survives rotation. Cleared when consumed by [addNewVideos] or
+     * [discardNewVideos]. Never persisted: a kill drops it, check again.
+     */
+    private var pendingOffer: NewVideosOffer? = null
 
     private var record: BatchRecord? = null
 
@@ -524,17 +547,20 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
      * @param batchId the ACTIVE or QUEUED batch to merge into
      * @param items candidate items (only missing/failed urls are used)
      * @param overrides per-item overrides for the merged items
+     * @param keepPositions true to keep the candidates' own positions (playlist
+     * numbers from "Check for new videos"); false appends after the max position
      * @return how many items were added or reset
      */
     fun mergeMissing(
         batchId: String,
         items: List<PlaylistBatchItem>,
-        overrides: Map<String, PerItemOverride>
+        overrides: Map<String, PerItemOverride>,
+        keepPositions: Boolean = false
     ): Int {
         ensureLoaded()
         val active = record
         if (active != null && active.id == batchId) {
-            val (merged, updated) = mergeInto(active, items, overrides)
+            val (merged, updated) = mergeInto(active, items, overrides, keepPositions)
             if (merged == 0) {
                 return 0
             }
@@ -547,7 +573,7 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         val target = otherBatches.firstOrNull {
             it.id == batchId && it.queueState == BatchQueueState.QUEUED
         } ?: return 0
-        val (merged, updated) = mergeInto(target, items, overrides)
+        val (merged, updated) = mergeInto(target, items, overrides, keepPositions)
         if (merged == 0) {
             return 0
         }
@@ -560,7 +586,8 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     private fun mergeInto(
         batch: BatchRecord,
         items: List<PlaylistBatchItem>,
-        overrides: Map<String, PerItemOverride>
+        overrides: Map<String, PerItemOverride>,
+        keepPositions: Boolean = false
     ): Pair<Int, BatchRecord> {
         val urls = items.map { it.url }.toSet()
         val existing = batch.items.map { it.url }.toSet()
@@ -582,11 +609,13 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
         }
         val added = items.filter { it.url !in existing }.map { item ->
             merged++
-            position++
+            if (!keepPositions) {
+                position++
+            }
             BatchItemRecord(
                 url = item.url,
                 title = item.title,
-                position = position,
+                position = if (keepPositions) item.position else position,
                 serviceId = item.serviceId,
                 uploaderName = item.uploaderName,
                 uploadDateText = item.uploadDateText,
@@ -1003,25 +1032,107 @@ class BatchDownloadManager private constructor(private val appContext: Context) 
     ) {
         refreshInFlight.remove(batchId)
         val current = batchById(batchId) ?: return
-        if (current.queueState == BatchQueueState.DONE) {
-            val preview = mergeInto(current, page.items, emptyMap())
-            if (preview.first == 0) {
-                reportRefreshResult(batchId, page, 0, before, current.queueState)
-                return
-            }
-            val requeued = current.copy(
+        val existing = current.items.map { it.url }.toSet()
+        val unknown = page.items.filter { it.url !in existing }
+        if (unknown.isEmpty()) {
+            reportRefreshResult(batchId, page, 0, before, current.queueState)
+            postMessage(appContext.getString(R.string.playlist_batch_nothing_new))
+            return
+        }
+        Log.d(
+            TAG,
+            "check new: batch=$batchId pages=${page.pages} " +
+                "fetched=${page.items.size} new=${unknown.size} awaiting-selection"
+        )
+        pendingOffer = NewVideosOffer(batchId, unknown)
+        _newVideosEvent.value = BatchEvent(pendingOffer!!)
+    }
+
+    /**
+     * Returns the unchecked offer for [batchId], or null when there is none or
+     * the batch no longer exists (stale event after a delete).
+     *
+     * @param batchId the batch the offer was made for
+     * @return the unknown videos in playlist order, or null
+     */
+    fun pendingNewVideos(batchId: String): List<PlaylistBatchItem>? {
+        val offer = pendingOffer
+        if (offer == null || offer.batchId != batchId) {
+            return null
+        }
+        if (batchById(batchId) == null) {
+            pendingOffer = null
+            return null
+        }
+        return offer.items
+    }
+
+    /**
+     * Drops an unchecked offer without touching batch state or the store.
+     *
+     * @param batchId the batch whose offer to drop
+     */
+    fun discardNewVideos(batchId: String) {
+        if (pendingOffer?.batchId == batchId) {
+            pendingOffer = null
+            Log.d(TAG, "new videos: batch=$batchId selection discarded")
+        }
+    }
+
+    /**
+     * Adds user-selected new videos to a batch, reactivating a DONE batch
+     * (QUEUED, or ACTIVE immediately when nothing runs) exactly like the
+     * previous merge-all behavior. Added items keep their playlist positions.
+     *
+     * @param batchId the batch to add to
+     * @param selected the chosen videos (only unknown urls are used)
+     */
+    fun addNewVideos(batchId: String, selected: List<PlaylistBatchItem>) {
+        if (selected.isEmpty()) {
+            Log.d(TAG, "add new: batch=$batchId selected=0 ignored")
+            return
+        }
+        ensureLoaded()
+        val batch = batchById(batchId)
+        if (batch == null) {
+            Log.d(TAG, "add new: unknown batch $batchId")
+            return
+        }
+        if (pendingOffer?.batchId == batchId) {
+            pendingOffer = null
+        }
+        val before = batch.queueState
+        val beforeStatus = batch.status
+        if (before == BatchQueueState.DONE) {
+            // Requeue first WITHOUT activating: activating now would pump an
+            // empty batch back to DONE before the merge below appends anything
+            // (visible when already bound, when pump runs synchronously).
+            val requeued = batch.copy(
                 status = BatchStatus.RUNNING,
                 queueState = BatchQueueState.QUEUED
             )
             otherBatches = otherBatches.map { if (it.id == batchId) requeued else it }
             persist()
-            if (record == null) {
-                activateNextBatch()
-            }
         }
-        val merged = mergeMissing(batchId, page.items, emptyMap())
+        val merged = mergeMissing(batchId, selected, emptyMap(), keepPositions = true)
+        if (merged == 0 && before == BatchQueueState.DONE) {
+            // Nothing appended: put the batch back exactly as it was.
+            otherBatches = otherBatches.map {
+                if (it.id == batchId) {
+                    it.copy(status = beforeStatus, queueState = BatchQueueState.DONE)
+                } else {
+                    it
+                }
+            }
+            persist()
+        } else if (merged > 0 && record == null) {
+            activateNextBatch()
+        }
         val after = batchById(batchId)?.queueState
-        reportRefreshResult(batchId, page, merged, before, after)
+        Log.d(
+            TAG,
+            "add new: batch=$batchId selected=${selected.size} state=$before->$after"
+        )
         if (merged > 0) {
             postMessage(appContext.getString(R.string.playlist_batch_new_videos, merged))
         } else {

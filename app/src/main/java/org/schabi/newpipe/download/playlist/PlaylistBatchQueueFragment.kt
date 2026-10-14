@@ -7,6 +7,7 @@ package org.schabi.newpipe.download.playlist
 
 import android.app.Activity
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuInflater
@@ -39,6 +40,8 @@ import org.schabi.newpipe.util.NavigationHelper
 class PlaylistBatchQueueFragment : Fragment() {
 
     companion object {
+        private const val TAG = "PlaylistBatch"
+
         @JvmStatic
         fun newInstance(): PlaylistBatchQueueFragment {
             return PlaylistBatchQueueFragment()
@@ -158,6 +161,9 @@ class PlaylistBatchQueueFragment : Fragment() {
         }
         manager.askLanguageEvent.observe(viewLifecycleOwner) { event ->
             event.consume()?.let { request -> showAskLanguageDialog(request) }
+        }
+        manager.newVideosEvent.observe(viewLifecycleOwner) { event ->
+            event.consume()?.let { offer -> showNewVideosDialog(offer.batchId) }
         }
         requireActivity().addMenuProvider(
             batchMenuProvider,
@@ -450,6 +456,18 @@ class PlaylistBatchQueueFragment : Fragment() {
                 Toast.LENGTH_LONG
             ).show()
         }
+    }
+
+    private fun showNewVideosDialog(batchId: String) {
+        if (manager.pendingNewVideos(batchId) == null) {
+            Log.d(TAG, "new videos: ignoring stale offer for $batchId")
+            return
+        }
+        val name = manager.batchList.value
+            ?.firstOrNull { it.batchId == batchId }
+            ?.playlistName.orEmpty()
+        NewVideosSheet.newInstance(batchId, name)
+            .show(childFragmentManager, "new_videos")
     }
 
     private fun showAskLanguageDialog(request: AskLanguageRequest) {

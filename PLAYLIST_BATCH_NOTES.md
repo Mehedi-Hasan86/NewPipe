@@ -35,6 +35,14 @@ device or in code is marked **unverified**.
   "Retry all failed" button in the item screen.
 - **Retry failed**: resets a batch's FAILED items to pending with cleared counters;
   a DONE batch goes back to QUEUED (or ACTIVE immediately if nothing runs).
+- **Check for new videos**: re-fetches the playlist and offers only the unknown
+  videos in a selection dialog (checkbox list with playlist positions, select
+  all/none, "N of M selected", Add selected / Cancel, all unchecked by
+  default). Add merges just the selection via the same path as the old
+  merge-all (DONE → QUEUED → ACTIVE) and keeps playlist positions, so file
+  numbers match playlist numbers. Cancel changes nothing. The offer is
+  in-memory only (rotation-safe, dropped on kill); the event carries the batch
+  id and is ignored when the batch is gone.
 - **Delete**: queued/done batches are dropped; deleting the ACTIVE batch stops its
   missions first (without deleting files), drops the record, and advances the
   queue. Downloaded files are always kept.
@@ -70,6 +78,9 @@ File map of `app/src/main/java/org/schabi/newpipe/download/playlist/`:
 - `PlaylistBatchQueueFragment.kt` — batch list + reused item screen.
 - `PlaylistBatchListAdapter.kt` — batch rows + overflow menu.
 - `PlaylistBatchQueueAdapter.kt` — item rows (progress/retry/cancel/filter/drag).
+- `NewVideosSheet.kt` + `NewVideosAdapter.kt` — "Check for new videos"
+  selection dialog (checkbox list with playlist positions, select all/none,
+  live count, Add selected / Cancel).
 - `PlaylistBatchActivity.kt` — intake host (URL args + share-intent fallback).
 - `PlaylistBatchQueueActivity.kt` — queue host.
 
@@ -163,6 +174,15 @@ Verified:
 - Low-storage survival (partial): device 100% full → `ENOSPC` persist/download
   failures logged via `Log.e`, no crash, batch COMPLETED with failed items
   counted (24/26), store intact. Warning-path UI not checked.
+- Check-for-new selection (2026-10-14, Quiz Game 1-item batch, 7-video
+  playlist): fetch computes unknown only (`fetched=7 new=6
+  awaiting-selection`), dialog lists the 6 unselected with playlist positions;
+  Add selected 2 → `mergeMissing added=2`, `add new: selected=2
+  DONE->ACTIVE`, files numbered 4 and 5 (playlist positions). Fixed a real
+  race found by test: requeue→activate→merge let a synchronous pump complete
+  the empty batch before the merge (merged=0, "Nothing new"); now merges into
+  QUEUED first and activates after. Cancel-no-op and Select-all paths not yet
+  verified on device.
 
 NOT verified:
 
