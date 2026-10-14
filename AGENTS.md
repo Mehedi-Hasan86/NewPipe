@@ -105,11 +105,21 @@ verified-vs-unverified tests, limitations, and the release checklist.
 
 ## 10. Current state (handoff)
 
-- Branch `feature/playlist-batch-download`, in sync with `myfork/...` at `4a395d1f3`; store-safety + stall-fix work NOT committed.
-- Uncommitted: BatchDownloadManager.kt, BatchStore.kt, PlaylistBatchListAdapter.kt, PlaylistBatchQueueFragment.kt, menu_playlist_batch_row.xml, strings.xml, settings.gradle.kts, LESSONS.md, ?? batch-changes.patch.
-- Installed: debug APK built 13:32 (JDK 21, reconcile resume + poll safety net + quarantine + persist throttle).
-- Device store: batch 7d477949 DONE (2 COMPLETED), verified by run-as cat.
-- Done: stall FIXED — reconcileAfterRestart calls resumeMission for idle/enqueued; kill-recovery test passed (auto-resume, item 2 follows, batch DONE).
-- Done: corruption test PASSED — Log.e "loadQueue failed" + full stack trace, `.corrupt-<ts>` quarantined, empty queue loaded, backup restored.
-- Bugs: (a) kill-recovery stall — FIXED (proven by log); (b) corrupt-store handling — FIXED (proven by log).
-- Next: no pending tests; feature ready for release checklist per PLAYLIST_BATCH_NOTES.md section 6.
+- Branch `feature/playlist-batch-download`, tracking
+  `myfork/feature/playlist-batch-download`; all batch work committed, see log.
+- Uncommitted (deliberately never commit): `settings.gradle.kts` (line-ending
+ -only local diff).
+- Built 2026-10-14: debug APK 07:19 (JDK 21 `jbr-21.0.11`, BUILD SUCCESSFUL in
+  11m 31s, 81 tasks / 13 executed; runCheckstyle clean, runKtlint clean).
+  Installed + force-stopped, fresh process confirmed via `ps -A`.
+- Device store: 4 batches, all COMPLETED (8, 6, 4 items + Shakira Mundial, 26
+  items after a check-new merge of 24).
+- Done 2026-10-14: 2-item batch to DONE (2/2); kill-recovery x2 (reconcile
+  resume, one errCode=1008 retry to clean finish); check-new both paths
+  (nothing-new + merge-24); low-storage survival partial (ENOSPC, no crash).
+- Open: 08:31:46 ANR opening Downloads (`DownloadActivity`, input-dispatch
+  timeout) — 6.5 s main-thread stall in Giga mission-recovery provider
+  queries, batch code idle; aggravated by 100%-full disk. Investigated
+  read-only; no fix yet. Traces file unreadable (system-only).
+- Next: free device space + Retry-failed on the 2 ENOSPC-failed items;
+  release checklist per PLAYLIST_BATCH_NOTES.md section 6.

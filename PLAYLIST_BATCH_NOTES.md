@@ -149,6 +149,20 @@ Verified:
   the app theme has no action bar).
 - Check for new videos: 5 new videos merged, batch reactivated (DONE → QUEUED →
   ACTIVE); nothing-new path returns no merge.
+- Rebuilt 2026-10-14 with JDK 21 (`jbr-21.0.11`): BUILD SUCCESSFUL in 11m 31s,
+  81 tasks (13 executed); APK freshness verified by timestamp + compile lines.
+- 2-item batch run to DONE (2/2, 0 failed), verified in log + store.
+- Kill-recovery twice on 2026-10-14 (force-stop mid-download → fresh process
+  `ensureLoaded` + `reconcileAfterRestart` resumed idle missions, bytes moving
+  with no Play press; second restart also retried an `errCode=1008` mission to
+  a clean finish). Both restarts proven USER REQUESTED (force-stop) in
+  `dumpsys exit-info`.
+- Check for new videos, both paths on 2026-10-14: nothing-new (`fetched=26
+  new=0 DONE->DONE`, plus two more batches) and merge (`fetched=26 new=24
+  DONE->ACTIVE`, reactivated batch finished 24/26).
+- Low-storage survival (partial): device 100% full → `ENOSPC` persist/download
+  failures logged via `Log.e`, no crash, batch COMPLETED with failed items
+  counted (24/26), store intact. Warning-path UI not checked.
 
 NOT verified:
 
@@ -173,6 +187,11 @@ Not applicable: NewPipe download notifications have no Pause/Cancel actions
 - DONE batches accumulate in the JSON store until deleted/cleared (no auto-prune).
 - A single untagged audio track carries no locale info (logged as `?(?)` with
   original-fallback).
+- 2026-10-14 ANR opening the Downloads screen (`DownloadActivity`,
+  input-dispatch timeout): log shows a ~6.5 s main-thread stall in Giga
+  mission-recovery provider queries (`existsAsFile` over all mission files),
+  batch code not running at the time; aggravated by a 100%-full disk.
+  Under investigation, no fix yet.
 - The queue row does not show the chosen language (log only).
 
 ## 6. Before release checklist for maintainers
